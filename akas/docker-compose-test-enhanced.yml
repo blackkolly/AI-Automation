@@ -1,0 +1,97 @@
+version: '3.8'
+
+services:
+  enhanced-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: enhanced-akas-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONPATH=/app
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-fallback-secret-key-for-development}
+    volumes:
+      - ./backend:/app
+      - ./data:/app/data
+    command: python enhanced_main.py
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - akas-network
+
+  enhanced-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: enhanced-akas-frontend
+    ports:
+      - "8501:8501"
+    environment:
+      - BACKEND_URL=http://enhanced-backend:8000
+    volumes:
+      - ./frontend:/app
+    command: streamlit run enhanced_app.py --server.port=8501 --server.address=0.0.0.0
+    depends_on:
+      - enhanced-backend
+    restart: unless-stopped
+    networks:
+      - akas-network
+
+  # Optional: MongoDB for data persistence
+  mongodb:
+    image: mongo:7.0
+    container_name: enhanced-akas-mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=password123
+      - MONGO_INITDB_DATABASE=akas
+    volumes:
+      - mongodb_data:/data/db
+      - ./scripts/init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js:ro
+    restart: unless-stopped
+    networks:
+      - akas-network
+
+  # Optional: Redis for caching
+  redis:
+    image: redis:7-alpine
+    container_name: enhanced-akas-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    networks:
+      - akas-network
+
+  # Optional: Vector database (Chroma/Qdrant alternative)
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: enhanced-akas-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+    networks:
+      - akas-network
+
+networks:
+  akas-network:
+    driver: bridge
+
+volumes:
+  mongodb_data:
+  redis_data:
+  qdrant_data:

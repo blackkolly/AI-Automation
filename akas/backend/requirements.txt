@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+langchain
+faiss-cpu
+openai
+python-dotenv
+pypdf
+requests
+langchain-community
+python-multipart
+tiktoken
+langchain-openai
+pyjwt
+passlib[bcrypt]
+python-jose[cryptography]
+bcrypt
