@@ -1,0 +1,116 @@
+# Example terraform.tfvars file
+# Copy this file to terraform.tfvars and customize the values
+
+# Basic Configuration
+project_name = "microservices-platform"
+environment  = "dev"  # Change to "staging" or "prod" for other environments
+aws_region   = "us-west-2"
+
+# Networking Configuration
+vpc_cidr                = "10.0.0.0/16"
+private_subnet_cidrs    = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+public_subnet_cidrs     = ["10.0.101.0/24", "10.0.102.0/24", "10.0.103.0/24"]
+database_subnet_cidrs   = ["10.0.201.0/24", "10.0.202.0/24", "10.0.203.0/24"]
+
+# EKS Configuration
+kubernetes_version = "1.27"
+cluster_endpoint_public_access_cidrs = ["0.0.0.0/0"]  # Restrict this in production
+
+# Node Group Configuration
+node_instance_types      = ["m5.large", "m5a.large"]
+node_group_min_size     = 1
+node_group_max_size     = 10
+node_group_desired_size = 3
+
+# Enable spot instances for cost optimization (dev environment)
+enable_spot_instances    = true
+spot_instance_percentage = 50
+
+# Database Configuration
+db_instance_class      = "db.t3.micro"  # Use larger instances for production
+db_allocated_storage   = 20
+db_max_allocated_storage = 100
+db_name               = "microservices"
+db_username           = "postgres"
+# db_password = "your-secure-password-here"  # Set this as environment variable
+
+# Redis Configuration
+redis_node_type = "cache.t3.micro"  # Use larger instances for production
+# redis_auth_token = "your-redis-auth-token"  # Set this as environment variable
+
+# Monitoring
+enable_monitoring = true
+prometheus_storage_size = "50Gi"
+# grafana_admin_password = "your-grafana-password"  # Set this as environment variable
+
+# Security Configuration (for production)
+enable_waf    = false  # Set to true for production
+enable_shield = false  # Set to true for production with premium support
+
+# Backup Configuration
+backup_retention_days      = 7
+enable_cross_region_backup = false  # Set to true for production
+
+# SSL/TLS Configuration (for production with custom domain)
+# ssl_certificate_arn = "arn:aws:acm:us-west-2:123456789012:certificate/12345678-1234-1234-1234-123456789012"
+# domain_name = "your-domain.com"
+
+# Logging
+log_retention_days = 30
+enable_flow_logs  = true
+
+# Auto Scaling
+enable_cluster_autoscaler = true
+enable_metrics_server    = true
+
+# Service Mesh
+enable_istio   = true
+istio_version = "1.18.2"
+
+# GitOps
+enable_argocd = true
+# argocd_admin_password = "your-argocd-password"  # Set this as environment variable
+# gitops_repo_url = "https://github.com/your-org/gitops-config.git"
+
+# Kafka Configuration (for production)
+kafka_instance_type = "kafka.t3.small"
+kafka_broker_count  = 3
+
+# External DNS (for production with custom domain)
+enable_external_dns = false
+# external_dns_domain = "your-domain.com"
+
+# Container Registry
+ecr_lifecycle_policy_count = 10
+
+# Notifications (optional)
+# sns_topic_arn = "arn:aws:sns:us-west-2:123456789012:alerts"
+# slack_webhook_url = "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK"
+
+# Development Tools (only for dev environment)
+enable_dev_tools = true
+
+# EKS Admin Users (optional - add your IAM users here)
+eks_admin_users = [
+  # {
+  #   userarn  = "arn:aws:iam::123456789012:user/your-username"
+  #   username = "your-username"
+  #   groups   = ["system:masters"]
+  # }
+]
+
+# Cost Optimization Notes:
+# - For development: Use t3.micro/small instances, enable spot instances
+# - For staging: Use t3.medium instances, mixed spot/on-demand
+# - For production: Use m5.large+ instances, primarily on-demand with some spot
+
+# Security Notes:
+# - Always use strong passwords and store them as environment variables
+# - Restrict cluster_endpoint_public_access_cidrs to your IP ranges in production
+# - Enable WAF and Shield for production workloads
+# - Use AWS Secrets Manager for sensitive data in production
+
+# Performance Notes:
+# - Increase db_instance_class and redis_node_type for production workloads
+# - Adjust node_group sizes based on expected load
+# - Use multiple availability zones for high availability

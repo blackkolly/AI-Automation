@@ -1,0 +1,195 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: auth-service-monitor
+  namespace: monitoring
+  labels:
+    app: auth-service
+    release: prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: auth-service
+  namespaceSelector:
+    matchNames:
+      - microservices
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 30s
+    scrapeTimeout: 10s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: api-gateway-monitor
+  namespace: monitoring
+  labels:
+    app: api-gateway
+    release: prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: api-gateway
+  namespaceSelector:
+    matchNames:
+      - microservices
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 30s
+    scrapeTimeout: 10s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: product-service-monitor
+  namespace: monitoring
+  labels:
+    app: product-service
+    release: prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: product-service
+  namespaceSelector:
+    matchNames:
+      - microservices
+  endpoints:
+  - port: http
+    path: /actuator/prometheus
+    interval: 30s
+    scrapeTimeout: 10s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: order-service-monitor
+  namespace: monitoring
+  labels:
+    app: order-service
+    release: prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: order-service
+  namespaceSelector:
+    matchNames:
+      - microservices
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 30s
+    scrapeTimeout: 10s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: microservices-alerts
+  namespace: monitoring
+  labels:
+    app: microservices
+    release: prometheus-stack
+spec:
+  groups:
+  - name: microservices.rules
+    rules:
+    # High CPU usage alert
+    - alert: HighCPUUsage
+      expr: sum(rate(container_cpu_usage_seconds_total{namespace="microservices"}[5m])) by (pod) > 0.8
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High CPU usage detected for pod {{ $labels.pod }}"
+        description: "Pod {{ $labels.pod }} has been using more than 80% CPU for more than 5 minutes"
+    
+    # High memory usage alert
+    - alert: HighMemoryUsage
+      expr: sum(container_memory_working_set_bytes{namespace="microservices"}) by (pod) / sum(container_spec_memory_limit_bytes{namespace="microservices"}) by (pod) > 0.8
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High memory usage detected for pod {{ $labels.pod }}"
+        description: "Pod {{ $labels.pod }} has been using more than 80% memory for more than 5 minutes"
+    
+    # Pod restart alert
+    - alert: PodRestarting
+      expr: increase(kube_pod_container_status_restarts_total{namespace="microservices"}[1h]) > 0
+      for: 0m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Pod {{ $labels.pod }} is restarting"
+        description: "Pod {{ $labels.pod }} has restarted {{ $value }} times in the last hour"
+    
+    # Service down alert
+    - alert: ServiceDown
+      expr: up{job=~".*-service"} == 0
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Service {{ $labels.job }} is down"
+        description: "Service {{ $labels.job }} has been down for more than 1 minute"
+    
+    # High HTTP error rate
+    - alert: HighHTTPErrorRate
+      expr: sum(rate(http_requests_total{status=~"5.."}[5m])) by (service) / sum(rate(http_requests_total[5m])) by (service) > 0.1
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "High HTTP error rate for service {{ $labels.service }}"
+        description: "Service {{ $labels.service }} has an error rate of {{ $value | humanizePercentage }}"
+    
+    # Database connection issues
+    - alert: DatabaseConnectionFailed
+      expr: postgresql_up == 0
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Database connection failed"
+        description: "Unable to connect to PostgreSQL database"
+    
+    # Redis connection issues
+    - alert: RedisConnectionFailed
+      expr: redis_up == 0
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Redis connection failed"
+        description: "Unable to connect to Redis"
+    
+    # Kafka lag alert
+    - alert: KafkaConsumerLag
+      expr: kafka_consumer_lag_sum > 1000
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High Kafka consumer lag"
+        description: "Kafka consumer lag is {{ $value }} messages"
+    
+    # Disk space alert
+    - alert: DiskSpaceRunningOut
+      expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 10
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Disk space running out"
+        description: "Disk space is below 10% on {{ $labels.instance }}"
+    
+    # High response time
+    - alert: HighResponseTime
+      expr: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, service)) > 2
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High response time for service {{ $labels.service }}"
+        description: "95th percentile response time is {{ $value }}s for service {{ $labels.service }}"

@@ -1,0 +1,152 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-secret
+  namespace: microservices
+type: Opaque
+data:
+  # These values should be base64 encoded
+  # Example: echo -n "password" | base64
+  username: cG9zdGdyZXM=  # postgres
+  password: ""  # Set this in your environment
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: redis-secret
+  namespace: microservices
+type: Opaque
+data:
+  # These values should be base64 encoded
+  auth-token: ""  # Set this in your environment
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: jwt-secret
+  namespace: microservices
+type: Opaque
+data:
+  # JWT secret key - should be base64 encoded
+  jwt-secret: ""  # Set this in your environment
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: oauth-secrets
+  namespace: microservices
+type: Opaque
+data:
+  # OAuth provider secrets - should be base64 encoded
+  google-client-id: ""     # Set this in your environment
+  google-client-secret: "" # Set this in your environment
+  github-client-id: ""     # Set this in your environment
+  github-client-secret: "" # Set this in your environment
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: microservices
+data:
+  # Database configuration
+  DB_HOST: "microservices-postgres.rds.amazonaws.com"  # Update with actual RDS endpoint
+  DB_PORT: "5432"
+  DB_NAME: "microservices"
+  
+  # Redis configuration
+  REDIS_HOST: "microservices-redis.cache.amazonaws.com"  # Update with actual Redis endpoint
+  REDIS_PORT: "6379"
+  
+  # Kafka configuration
+  KAFKA_BROKERS: "kafka-broker-1.kafka.svc.cluster.local:9092,kafka-broker-2.kafka.svc.cluster.local:9092,kafka-broker-3.kafka.svc.cluster.local:9092"
+  
+  # Service URLs
+  AUTH_SERVICE_URL: "http://auth-service.microservices.svc.cluster.local:3000"
+  PRODUCT_SERVICE_URL: "http://product-service.microservices.svc.cluster.local:8080"
+  ORDER_SERVICE_URL: "http://order-service.microservices.svc.cluster.local:3002"
+  
+  # Environment configuration
+  NODE_ENV: "production"
+  LOG_LEVEL: "info"
+  
+  # Monitoring
+  PROMETHEUS_ENABLED: "true"
+  TRACING_ENABLED: "true"
+  JAEGER_ENDPOINT: "http://jaeger-collector.monitoring.svc.cluster.local:14268/api/traces"
+  
+  # Rate limiting
+  RATE_LIMIT_WINDOW_MS: "900000"  # 15 minutes
+  RATE_LIMIT_MAX_REQUESTS: "1000"
+  
+  # Security
+  CORS_ORIGIN: "*"  # Configure appropriately for production
+  HELMET_ENABLED: "true"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  namespace: microservices
+data:
+  nginx.conf: |
+    upstream auth_service {
+        server auth-service:3000;
+    }
+    
+    upstream product_service {
+        server product-service:8080;
+    }
+    
+    upstream order_service {
+        server order-service:3002;
+    }
+    
+    server {
+        listen 80;
+        server_name _;
+        
+        # Health check endpoint
+        location /health {
+            access_log off;
+            return 200 "healthy\n";
+            add_header Content-Type text/plain;
+        }
+        
+        # API Gateway routes
+        location /api/auth/ {
+            proxy_pass http://auth_service/;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+        
+        location /api/products/ {
+            proxy_pass http://product_service/;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+        
+        location /api/orders/ {
+            proxy_pass http://order_service/;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+        
+        # WebSocket proxy for real-time features
+        location /ws/ {
+            proxy_pass http://order_service;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+    }
