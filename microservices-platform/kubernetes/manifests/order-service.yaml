@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: order-service
-          image: 779066052352.dkr.ecr.us-west-2.amazonaws.com/microservices-platform-prod/order-service:latest
+          image: 779066052352.dkr.ecr.us-west-2.amazonaws.com/microservices-platform-prod/order-service:v2.0
           ports:
             - containerPort: 3003
           env:

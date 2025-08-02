@@ -2,46 +2,53 @@ const express = require('express');
 const router = express.Router();
 const logger = require('../utils/logger');
 
-// Webhook for payment notifications
-router.post('/payment', (req, res) => {
-  try {
-    logger.info('Payment webhook received:', req.body);
-    
-    // Process payment webhook
-    const { orderId, status, transactionId } = req.body;
-    
-    // Here you would typically update the order status based on payment status
-    // and publish events to Kafka
-    
-    res.status(200).json({ 
-      received: true,
-      orderId,
-      status 
-    });
-  } catch (error) {
-    logger.error('Error processing payment webhook:', error);
-    res.status(500).json({ error: 'Failed to process webhook' });
-  }
+// Payment webhook
+router.post('/payment', async (req, res) => {
+    try {
+        const paymentData = req.body;
+        logger.info('Received payment webhook:', paymentData);
+        
+        // Process payment notification
+        // This would typically update order status based on payment result
+        
+        res.status(200).json({ message: 'Payment webhook processed successfully' });
+    } catch (error) {
+        logger.error('Error processing payment webhook:', error);
+        res.status(500).json({ error: 'Failed to process payment webhook' });
+    }
 });
 
-// Webhook for shipping notifications
-router.post('/shipping', (req, res) => {
-  try {
-    logger.info('Shipping webhook received:', req.body);
-    
-    const { orderId, status, trackingNumber } = req.body;
-    
-    // Process shipping webhook
-    
-    res.status(200).json({ 
-      received: true,
-      orderId,
-      status 
-    });
-  } catch (error) {
-    logger.error('Error processing shipping webhook:', error);
-    res.status(500).json({ error: 'Failed to process webhook' });
-  }
+// Inventory webhook
+router.post('/inventory', async (req, res) => {
+    try {
+        const inventoryData = req.body;
+        logger.info('Received inventory webhook:', inventoryData);
+        
+        // Process inventory notification
+        // This would typically handle stock level changes
+        
+        res.status(200).json({ message: 'Inventory webhook processed successfully' });
+    } catch (error) {
+        logger.error('Error processing inventory webhook:', error);
+        res.status(500).json({ error: 'Failed to process inventory webhook' });
+    }
+});
+
+// Generic webhook handler
+router.post('/:service', async (req, res) => {
+    try {
+        const { service } = req.params;
+        const webhookData = req.body;
+        
+        logger.info(`Received webhook from ${service}:`, webhookData);
+        
+        res.status(200).json({ 
+            message: `Webhook from ${service} processed successfully` 
+        });
+    } catch (error) {
+        logger.error('Error processing webhook:', error);
+        res.status(500).json({ error: 'Failed to process webhook' });
+    }
 });
 
 module.exports = router;

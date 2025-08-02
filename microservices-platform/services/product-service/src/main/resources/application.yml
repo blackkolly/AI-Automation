@@ -1,33 +1,46 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /
+
 spring:
   application:
     name: product-service
-  
+    
   datasource:
-    url: jdbc:postgresql://${SPRING_DATASOURCE_URL:localhost:5432}/products
-    username: ${SPRING_DATASOURCE_USERNAME:postgres}
-    password: ${SPRING_DATASOURCE_PASSWORD:postgres}
+    url: jdbc:postgresql://${DB_HOST:postgres.microservices.svc.cluster.local}:${DB_PORT:5432}/${DB_NAME:products}
+    username: ${DB_USER:postgres}
+    password: ${DB_PASSWORD:postgres}
     driver-class-name: org.postgresql.Driver
-  
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      
   jpa:
     hibernate:
-      ddl-auto: create-drop
-    show-sql: true
+      ddl-auto: ${DDL_AUTO:update}
+    show-sql: ${SHOW_SQL:false}
     properties:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
         format_sql: true
-  
-  data:
-    redis:
-      host: ${SPRING_REDIS_HOST:localhost}
-      port: ${SPRING_REDIS_PORT:6379}
-      timeout: 2000ms
-      lettuce:
-        pool:
-          max-active: 8
-          max-idle: 8
-          min-idle: 0
+        jdbc:
+          time_zone: UTC
+        
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+    time-zone: UTC
+    
+  security:
+    jwt:
+      secret: ${JWT_SECRET:your-secret-key}
+      expiration: ${JWT_EXPIRATION:86400}
 
+# Actuator configuration
 management:
   endpoints:
     web:
@@ -36,17 +49,38 @@ management:
   endpoint:
     health:
       show-details: always
-  tracing:
-    sampling:
-      probability: 1.0
-  zipkin:
-    tracing:
-      endpoint: ${MANAGEMENT_ZIPKIN_TRACING_ENDPOINT:http://localhost:9411/api/v2/spans}
+  info:
+    env:
+      enabled: true
 
-server:
-  port: 8080
+# Application info
+info:
+  app:
+    name: ${spring.application.name}
+    description: Product catalog microservice
+    version: 1.0.0
+    encoding: UTF-8
+    java:
+      version: ${java.version}
 
+# Logging configuration
 logging:
   level:
-    com.microservices.productservice: DEBUG
-    org.springframework.data.redis: DEBUG
+    com.microservices.productservice: ${LOG_LEVEL:INFO}
+    org.springframework.security: WARN
+    org.hibernate.SQL: ${SQL_LOG_LEVEL:WARN}
+    org.hibernate.type.descriptor.sql.BasicBinder: ${SQL_PARAM_LOG_LEVEL:WARN}
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+  file:
+    name: logs/product-service.log
+    
+# Custom application properties
+app:
+  name: Product Service
+  version: 1.0.0
+  description: Microservice for managing product catalog
+  api:
+    version: v1
+    base-path: /api/products

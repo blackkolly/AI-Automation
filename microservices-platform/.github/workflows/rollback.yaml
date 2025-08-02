@@ -1,0 +1,80 @@
+name: Rollback Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+        - staging
+        - production
+      service:
+        description: 'Service to rollback'
+        required: true
+        type: choice
+        options:
+        - api-gateway
+        - auth-service
+        - order-service
+        - product-service
+        - frontend
+      revision:
+        description: 'Revision to rollback to (default: previous)'
+        required: false
+        default: ''
+
+env:
+  AWS_REGION: us-east-1
+  EKS_CLUSTER_NAME: microservices-platform-prod
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: '1.28.0'
+      
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.EKS_CLUSTER_NAME }}
+      
+      - name: Rollback deployment
+        run: |
+          NAMESPACE="${{ github.event.inputs.environment == 'staging' && 'staging' || 'default' }}"
+          SERVICE="${{ github.event.inputs.service }}"
+          REVISION="${{ github.event.inputs.revision }}"
+          
+          echo "Rolling back $SERVICE in $NAMESPACE"
+          
+          if [ -z "$REVISION" ]; then
+            kubectl rollout undo deployment/$SERVICE -n $NAMESPACE
+          else
+            kubectl rollout undo deployment/$SERVICE --to-revision=$REVISION -n $NAMESPACE
+          fi
+          
+          kubectl rollout status deployment/$SERVICE -n $NAMESPACE --timeout=300s
+      
+      - name: Verify rollback
+        run: |
+          NAMESPACE="${{ github.event.inputs.environment == 'staging' && 'staging' || 'default' }}"
+          SERVICE="${{ github.event.inputs.service }}"
+          
+          kubectl get deployment $SERVICE -n $NAMESPACE
+          kubectl get pods -l app=$SERVICE -n $NAMESPACE
+          
+          # Check rollout history
+          kubectl rollout history deployment/$SERVICE -n $NAMESPACE

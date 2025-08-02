@@ -1,55 +1,51 @@
 {
   "name": "order-service",
   "version": "1.0.0",
-  "description": "Order processing microservice with Kafka event streaming",
+  "description": "Order management microservice",
   "main": "src/app.js",
   "scripts": {
     "start": "node src/app.js",
     "dev": "nodemon src/app.js",
     "test": "jest",
-    "test:coverage": "jest --coverage",
     "lint": "eslint src/",
-    "lint:fix": "eslint src/ --fix"
+    "docker:build": "docker build -t order-service .",
+    "docker:run": "docker run -p 3003:3003 order-service"
   },
   "dependencies": {
     "express": "^4.18.2",
-    "kafkajs": "^2.2.4",
-    "pg": "^8.11.3",
-    "redis": "^4.6.7",
-    "jsonwebtoken": "^9.0.2",
     "cors": "^2.8.5",
     "helmet": "^7.0.0",
-    "express-rate-limit": "^6.10.0",
-    "dotenv": "^16.3.1",
-    "joi": "^17.9.2",
-    "winston": "^3.10.0",
-    "express-prometheus-middleware": "^1.2.0",
-    "socket.io": "^4.7.2",
-    "uuid": "^9.0.0",
-    "axios": "^1.5.0",
+    "express-rate-limit": "^6.8.1",
+    "compression": "^1.7.4",
+    "morgan": "^1.10.0",
+    "kafkajs": "^2.2.4",
     "bull": "^4.11.3",
-    "ioredis": "^5.3.2",
-    "@opentelemetry/api": "^1.4.1",
-    "@opentelemetry/sdk-node": "^0.41.2",
-    "@opentelemetry/auto-instrumentations-node": "^0.39.4",
-    "pino": "^8.15.0",
-    "pino-pretty": "^10.2.0"
+    "redis": "^4.6.7",
+    "pg": "^8.11.1",
+    "mongoose": "^7.4.0",
+    "jsonwebtoken": "^9.0.1",
+    "bcryptjs": "^2.4.3",
+    "joi": "^17.9.2",
+    "uuid": "^9.0.0",
+    "winston": "^3.10.0",
+    "dotenv": "^16.3.1"
   },
   "devDependencies": {
     "nodemon": "^3.0.1",
-    "jest": "^29.6.2",
-    "eslint": "^8.47.0",
+    "jest": "^29.6.1",
     "supertest": "^6.3.3",
-    "@types/jest": "^29.5.4"
+    "eslint": "^8.45.0"
   },
   "engines": {
     "node": ">=18.0.0"
   },
   "keywords": [
+    "microservice",
     "orders",
     "kafka",
-    "microservice",
-    "event-streaming",
-    "nodejs"
-  ]
+    "redis",
+    "postgresql"
+  ],
+  "author": "Microservices Platform",
+  "license": "MIT"
 }

@@ -2,173 +2,215 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const mongoose = require('mongoose');
-const redis = require('redis');
-const promMiddleware = require('express-prometheus-middleware');
-const passport = require('passport');
+const { Pool } = require('pg');
+const winston = require('winston');
 require('dotenv').config();
 
+// Import routes
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
-const healthRoutes = require('./routes/health');
-const logger = require('./utils/logger');
-const { connectDB } = require('./config/database');
-const { connectRedis } = require('./config/redis');
-const setupPassport = require('./config/passport');
+
+// Import middleware
+const errorHandler = require('./middleware/errorHandler');
+const requestLogger = require('./middleware/requestLogger');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Prometheus metrics middleware
-app.use(promMiddleware({
-  metricsPath: '/metrics',
-  collectDefaultMetrics: true,
-  requestDurationBuckets: [0.1, 0.5, 1, 1.5],
-}));
+// Configure logger
+const logger = winston.createLogger({
+  level: 'info',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.json()
+  ),
+  transports: [
+    new winston.transports.Console(),
+    new winston.transports.File({ filename: 'auth-service.log' })
+  ]
+});
+
+// Database connection
+const db = new Pool({
+  host: process.env.DB_HOST || 'postgres.microservices.svc.cluster.local',
+  port: process.env.DB_PORT || 5432,
+  database: process.env.DB_NAME || 'postgres',
+  user: process.env.DB_USER || 'postgres',
+  password: process.env.DB_PASSWORD || 'postgres',
+  max: 20,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 2000,
+});
+
+// Test database connection
+db.connect()
+  .then(() => logger.info('✅ Connected to PostgreSQL database'))
+  .catch(err => logger.error('❌ Database connection failed:', err));
+
+// Make db available to routes
+app.locals.db = db;
+app.locals.logger = logger;
 
 // Security middleware
-app.use(helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      scriptSrc: ["'self'"],
-      imgSrc: ["'self'", "data:", "https:"],
-    },
-  },
-}));
-
-// CORS configuration
+app.use(helmet());
 app.use(cors({
   origin: process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000'],
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  credentials: true
 }));
 
 // Rate limiting
-const limiter = rateLimit({
+const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
-  message: 'Too many requests from this IP, please try again later.',
+  max: 5, // limit each IP to 5 requests per windowMs for auth endpoints
+  message: 'Too many authentication attempts, please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
 });
-app.use('/api/', limiter);
 
-// Auth-specific rate limiting
-const authLimiter = rateLimit({
+const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // limit each IP to 5 auth requests per windowMs
-  message: 'Too many authentication attempts, please try again later.',
-  skipSuccessfulRequests: true,
+  max: 100, // limit each IP to 100 requests per windowMs
+  message: 'Too many requests from this IP, please try again later.'
 });
 
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-
-// Passport middleware
-app.use(passport.initialize());
-setupPassport();
+app.use(express.urlencoded({ extended: true }));
 
 // Request logging
-app.use((req, res, next) => {
-  logger.info(`${req.method} ${req.originalUrl}`, {
-    ip: req.ip,
-    userAgent: req.get('User-Agent'),
-    requestId: req.headers['x-request-id'] || 'unknown',
-  });
-  next();
+app.use(requestLogger);
+
+// Apply general rate limiting to all routes
+app.use(generalLimiter);
+
+// Health check endpoint
+app.get('/health', async (req, res) => {
+  try {
+    // Test database connection
+    await db.query('SELECT NOW()');
+    
+    res.json({
+      status: 'healthy',
+      service: 'auth-service',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      database: 'connected',
+      version: process.env.npm_package_version || '1.0.0'
+    });
+  } catch (error) {
+    logger.error('Health check failed:', error);
+    res.status(503).json({
+      status: 'unhealthy',
+      service: 'auth-service',
+      timestamp: new Date().toISOString(),
+      database: 'disconnected',
+      error: error.message
+    });
+  }
 });
+
+// Apply auth-specific rate limiting to auth routes
+app.use('/auth', authLimiter);
 
 // Routes
-app.use('/health', healthRoutes);
-app.use('/api/auth', authLimiter, authRoutes);
-app.use('/api/users', userRoutes);
+app.use('/auth', authRoutes);
+app.use('/users', userRoutes);
 
-// 404 handler
+// Catch-all for unmatched routes
 app.use('*', (req, res) => {
   res.status(404).json({
-    success: false,
-    message: 'Route not found',
+    error: 'Route not found',
     path: req.originalUrl,
+    availableRoutes: ['/auth', '/users', '/health']
   });
 });
 
-// Global error handler
-app.use((err, req, res, next) => {
-  logger.error('Unhandled error:', {
-    error: err.message,
-    stack: err.stack,
-    url: req.originalUrl,
-    method: req.method,
-    ip: req.ip,
-  });
+// Error handling middleware (must be last)
+app.use(errorHandler);
 
-  // Don't leak error details in production
-  const message = process.env.NODE_ENV === 'production' 
-    ? 'Internal server error' 
-    : err.message;
-
-  res.status(err.status || 500).json({
-    success: false,
-    message,
-    ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }),
-  });
-});
-
-// Graceful shutdown handler
-const gracefulShutdown = () => {
-  logger.info('Received shutdown signal, closing server gracefully...');
+// Graceful shutdown
+const gracefulShutdown = async (signal) => {
+  logger.info(`Received ${signal}. Starting graceful shutdown...`);
   
-  server.close(() => {
-    logger.info('HTTP server closed');
-    
-    // Close database connections
-    mongoose.connection.close(() => {
-      logger.info('MongoDB connection closed');
-      process.exit(0);
-    });
-  });
-
-  // Force close after 30 seconds
-  setTimeout(() => {
-    logger.error('Could not close connections in time, forcefully shutting down');
+  try {
+    await db.end();
+    logger.info('Database connections closed');
+    process.exit(0);
+  } catch (error) {
+    logger.error('Error during shutdown:', error);
     process.exit(1);
-  }, 30000);
+  }
 };
 
-// Initialize connections and start server
-async function startServer() {
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Initialize database tables
+const initializeDatabase = async () => {
   try {
-    // Connect to databases
-    await connectDB();
-    await connectRedis();
+    // Create users table if it doesn't exist
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
+        first_name VARCHAR(100),
+        last_name VARCHAR(100),
+        role VARCHAR(50) DEFAULT 'user',
+        is_active BOOLEAN DEFAULT true,
+        email_verified BOOLEAN DEFAULT false,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Create user_sessions table for token blacklisting
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS user_sessions (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        token_jti VARCHAR(255) UNIQUE NOT NULL,
+        expires_at TIMESTAMP NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Create index for better performance
+    await db.query(`
+      CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+      CREATE INDEX IF NOT EXISTS idx_sessions_jti ON user_sessions(token_jti);
+      CREATE INDEX IF NOT EXISTS idx_sessions_expires ON user_sessions(expires_at);
+    `);
+
+    logger.info('✅ Database tables initialized successfully');
+  } catch (error) {
+    logger.error('❌ Database initialization failed:', error);
+    throw error;
+  }
+};
+
+// Start server
+const startServer = async () => {
+  try {
+    await initializeDatabase();
     
-    // Start server
-    const server = app.listen(PORT, '0.0.0.0', () => {
-      logger.info(`Auth service started successfully`, {
-        port: PORT,
-        environment: process.env.NODE_ENV || 'development',
-        version: process.env.npm_package_version || '1.0.0',
-      });
+    app.listen(PORT, '0.0.0.0', () => {
+      logger.info(`🚀 Auth service running on port ${PORT}`);
+      logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
+      logger.info('Available endpoints:');
+      logger.info('  POST /auth/register - User registration');
+      logger.info('  POST /auth/login - User login');
+      logger.info('  POST /auth/logout - User logout');
+      logger.info('  POST /auth/refresh - Token refresh');
+      logger.info('  GET  /users/profile - User profile (authenticated)');
+      logger.info('  GET  /health - Health check');
     });
-
-    // Graceful shutdown handlers
-    process.on('SIGTERM', gracefulShutdown);
-    process.on('SIGINT', gracefulShutdown);
-
-    return server;
   } catch (error) {
     logger.error('Failed to start server:', error);
     process.exit(1);
   }
-}
+};
 
-// Start the server
-if (require.main === module) {
-  startServer();
-}
+startServer();
 
 module.exports = app;

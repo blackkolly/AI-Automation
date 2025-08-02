@@ -2,237 +2,251 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const Joi = require('joi');
-const passport = require('passport');
-const User = require('../models/User');
-const { authenticateToken, generateTokens } = require('../middleware/auth');
-const { validateInput } = require('../middleware/validation');
-const logger = require('../utils/logger');
-const { getFromCache, setToCache, deleteFromCache } = require('../utils/cache');
+const { v4: uuidv4 } = require('uuid');
 
 const router = express.Router();
 
 // Validation schemas
 const registerSchema = Joi.object({
-  username: Joi.string().alphanum().min(3).max(30).required(),
   email: Joi.string().email().required(),
-  password: Joi.string().min(8).pattern(new RegExp('^(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[!@#\$%\^&\*])')).required(),
+  password: Joi.string().min(8).required(),
   firstName: Joi.string().min(2).max(50).required(),
-  lastName: Joi.string().min(2).max(50).required(),
-  role: Joi.string().valid('user', 'admin').default('user'),
+  lastName: Joi.string().min(2).max(50).required()
 });
 
 const loginSchema = Joi.object({
-  login: Joi.string().required(), // can be username or email
-  password: Joi.string().required(),
+  email: Joi.string().email().required(),
+  password: Joi.string().required()
 });
 
-const refreshTokenSchema = Joi.object({
-  refreshToken: Joi.string().required(),
-});
+// JWT configuration
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '24h';
+const REFRESH_TOKEN_EXPIRES_IN = process.env.REFRESH_TOKEN_EXPIRES_IN || '7d';
 
-// POST /api/auth/register
-router.post('/register', validateInput(registerSchema), async (req, res) => {
+// Helper function to generate tokens
+const generateTokens = (user) => {
+  const jti = uuidv4();
+  
+  const accessToken = jwt.sign(
+    {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      jti: jti
+    },
+    JWT_SECRET,
+    { expiresIn: JWT_EXPIRES_IN }
+  );
+
+  const refreshToken = jwt.sign(
+    {
+      id: user.id,
+      jti: jti,
+      type: 'refresh'
+    },
+    JWT_SECRET,
+    { expiresIn: REFRESH_TOKEN_EXPIRES_IN }
+  );
+
+  return { accessToken, refreshToken, jti };
+};
+
+// Register endpoint
+router.post('/register', async (req, res) => {
   try {
-    const { username, email, password, firstName, lastName, role } = req.body;
+    const db = req.app.locals.db;
+    const logger = req.app.locals.logger;
+
+    // Validate request body
+    const { error, value } = registerSchema.validate(req.body);
+    if (error) {
+      return res.status(400).json({
+        error: 'Validation failed',
+        details: error.details.map(d => d.message)
+      });
+    }
+
+    const { email, password, firstName, lastName } = value;
 
     // Check if user already exists
-    const existingUser = await User.findOne({
-      $or: [{ email }, { username }]
-    });
+    const existingUser = await db.query(
+      'SELECT id FROM users WHERE email = $1',
+      [email]
+    );
 
-    if (existingUser) {
+    if (existingUser.rows.length > 0) {
       return res.status(409).json({
-        success: false,
-        message: 'User already exists with this email or username'
+        error: 'User already exists',
+        message: 'A user with this email address already exists'
       });
     }
 
     // Hash password
     const saltRounds = 12;
-    const hashedPassword = await bcrypt.hash(password, saltRounds);
+    const passwordHash = await bcrypt.hash(password, saltRounds);
 
     // Create user
-    const user = new User({
-      username,
-      email,
-      password: hashedPassword,
-      firstName,
-      lastName,
-      role,
-      isActive: true,
-      emailVerified: false,
-    });
+    const result = await db.query(`
+      INSERT INTO users (email, password_hash, first_name, last_name, role)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING id, email, first_name, last_name, role, created_at
+    `, [email, passwordHash, firstName, lastName, 'user']);
 
-    await user.save();
+    const user = result.rows[0];
 
     // Generate tokens
-    const { accessToken, refreshToken } = generateTokens(user);
+    const { accessToken, refreshToken, jti } = generateTokens(user);
 
-    // Cache user session
-    await setToCache(`user_session_${user._id}`, {
-      userId: user._id,
-      username: user.username,
-      role: user.role,
-    }, 24 * 60 * 60); // 24 hours
+    // Store session
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+    await db.query(
+      'INSERT INTO user_sessions (user_id, token_jti, expires_at) VALUES ($1, $2, $3)',
+      [user.id, jti, expiresAt]
+    );
 
-    logger.info('User registered successfully', {
-      userId: user._id,
-      username: user.username,
-      email: user.email,
-    });
+    logger.info(`User registered successfully: ${user.email}`);
 
     res.status(201).json({
       success: true,
       message: 'User registered successfully',
-      data: {
-        user: {
-          id: user._id,
-          username: user.username,
-          email: user.email,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          role: user.role,
-        },
+      user: {
+        id: user.id,
+        email: user.email,
+        firstName: user.first_name,
+        lastName: user.last_name,
+        role: user.role
+      },
+      tokens: {
         accessToken,
         refreshToken,
+        expiresIn: JWT_EXPIRES_IN
       }
     });
 
   } catch (error) {
-    logger.error('Registration error:', error);
+    req.app.locals.logger.error('Registration error:', error);
     res.status(500).json({
-      success: false,
-      message: 'Registration failed'
+      error: 'Registration failed',
+      message: 'An internal error occurred during registration'
     });
   }
 });
 
-// POST /api/auth/login
-router.post('/login', validateInput(loginSchema), async (req, res) => {
+// Login endpoint
+router.post('/login', async (req, res) => {
   try {
-    const { login, password } = req.body;
+    const db = req.app.locals.db;
+    const logger = req.app.locals.logger;
 
-    // Find user by username or email
-    const user = await User.findOne({
-      $or: [{ email: login }, { username: login }],
-      isActive: true
-    }).select('+password');
-
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid credentials'
+    // Validate request body
+    const { error, value } = loginSchema.validate(req.body);
+    if (error) {
+      return res.status(400).json({
+        error: 'Validation failed',
+        details: error.details.map(d => d.message)
       });
     }
 
-    // Check password
-    const validPassword = await bcrypt.compare(password, user.password);
-    if (!validPassword) {
-      // Log failed login attempt
-      logger.warn('Failed login attempt', {
-        login,
-        ip: req.ip,
-        userAgent: req.get('User-Agent'),
-      });
+    const { email, password } = value;
 
+    // Find user
+    const result = await db.query(`
+      SELECT id, email, password_hash, first_name, last_name, role, is_active
+      FROM users 
+      WHERE email = $1
+    `, [email]);
+
+    if (result.rows.length === 0) {
       return res.status(401).json({
-        success: false,
-        message: 'Invalid credentials'
+        error: 'Invalid credentials',
+        message: 'Email or password is incorrect'
       });
     }
 
-    // Update last login
-    user.lastLogin = new Date();
-    await user.save();
+    const user = result.rows[0];
+
+    // Check if user is active
+    if (!user.is_active) {
+      return res.status(401).json({
+        error: 'Account disabled',
+        message: 'Your account has been disabled. Please contact support.'
+      });
+    }
+
+    // Verify password
+    const isValidPassword = await bcrypt.compare(password, user.password_hash);
+    if (!isValidPassword) {
+      return res.status(401).json({
+        error: 'Invalid credentials',
+        message: 'Email or password is incorrect'
+      });
+    }
 
     // Generate tokens
-    const { accessToken, refreshToken } = generateTokens(user);
+    const { accessToken, refreshToken, jti } = generateTokens(user);
 
-    // Cache user session
-    await setToCache(`user_session_${user._id}`, {
-      userId: user._id,
-      username: user.username,
-      role: user.role,
-    }, 24 * 60 * 60); // 24 hours
+    // Store session
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+    await db.query(
+      'INSERT INTO user_sessions (user_id, token_jti, expires_at) VALUES ($1, $2, $3)',
+      [user.id, jti, expiresAt]
+    );
 
-    logger.info('User logged in successfully', {
-      userId: user._id,
-      username: user.username,
-      ip: req.ip,
-    });
+    logger.info(`User logged in successfully: ${user.email}`);
 
     res.json({
       success: true,
       message: 'Login successful',
-      data: {
-        user: {
-          id: user._id,
-          username: user.username,
-          email: user.email,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          role: user.role,
-        },
+      user: {
+        id: user.id,
+        email: user.email,
+        firstName: user.first_name,
+        lastName: user.last_name,
+        role: user.role
+      },
+      tokens: {
         accessToken,
         refreshToken,
+        expiresIn: JWT_EXPIRES_IN
       }
     });
 
   } catch (error) {
-    logger.error('Login error:', error);
+    req.app.locals.logger.error('Login error:', error);
     res.status(500).json({
-      success: false,
-      message: 'Login failed'
+      error: 'Login failed',
+      message: 'An internal error occurred during login'
     });
   }
 });
 
-// POST /api/auth/refresh
-router.post('/refresh', validateInput(refreshTokenSchema), async (req, res) => {
+// Logout endpoint
+router.post('/logout', async (req, res) => {
   try {
-    const { refreshToken } = req.body;
+    const db = req.app.locals.db;
+    const logger = req.app.locals.logger;
+    
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
 
-    // Verify refresh token
-    const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
-    const user = await User.findById(decoded.userId).where({ isActive: true });
-
-    if (!user) {
+    if (!token) {
       return res.status(401).json({
-        success: false,
-        message: 'Invalid refresh token'
+        error: 'No token provided',
+        message: 'Authorization token is required'
       });
     }
 
-    // Generate new tokens
-    const tokens = generateTokens(user);
+    // Verify and decode token
+    const decoded = jwt.verify(token, JWT_SECRET);
+    
+    // Remove session from database
+    await db.query(
+      'DELETE FROM user_sessions WHERE token_jti = $1',
+      [decoded.jti]
+    );
 
-    res.json({
-      success: true,
-      message: 'Tokens refreshed successfully',
-      data: tokens
-    });
-
-  } catch (error) {
-    logger.error('Token refresh error:', error);
-    res.status(401).json({
-      success: false,
-      message: 'Invalid refresh token'
-    });
-  }
-});
-
-// POST /api/auth/logout
-router.post('/logout', authenticateToken, async (req, res) => {
-  try {
-    const userId = req.user.userId;
-
-    // Remove user session from cache
-    await deleteFromCache(`user_session_${userId}`);
-
-    logger.info('User logged out successfully', {
-      userId,
-      username: req.user.username,
-    });
+    logger.info(`User logged out successfully: ${decoded.email}`);
 
     res.json({
       success: true,
@@ -240,91 +254,167 @@ router.post('/logout', authenticateToken, async (req, res) => {
     });
 
   } catch (error) {
-    logger.error('Logout error:', error);
+    if (error.name === 'JsonWebTokenError') {
+      return res.status(401).json({
+        error: 'Invalid token',
+        message: 'The provided token is invalid'
+      });
+    }
+
+    req.app.locals.logger.error('Logout error:', error);
     res.status(500).json({
-      success: false,
-      message: 'Logout failed'
+      error: 'Logout failed',
+      message: 'An internal error occurred during logout'
     });
   }
 });
 
-// GET /api/auth/me
-router.get('/me', authenticateToken, async (req, res) => {
+// Refresh token endpoint
+router.post('/refresh', async (req, res) => {
   try {
-    const user = await User.findById(req.user.userId);
+    const db = req.app.locals.db;
+    const logger = req.app.locals.logger;
     
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
+    const { refreshToken } = req.body;
+
+    if (!refreshToken) {
+      return res.status(401).json({
+        error: 'Refresh token required',
+        message: 'Refresh token must be provided'
       });
     }
 
+    // Verify refresh token
+    const decoded = jwt.verify(refreshToken, JWT_SECRET);
+    
+    if (decoded.type !== 'refresh') {
+      return res.status(401).json({
+        error: 'Invalid token type',
+        message: 'Token is not a refresh token'
+      });
+    }
+
+    // Check if session exists and is valid
+    const sessionResult = await db.query(
+      'SELECT user_id FROM user_sessions WHERE token_jti = $1 AND expires_at > NOW()',
+      [decoded.jti]
+    );
+
+    if (sessionResult.rows.length === 0) {
+      return res.status(401).json({
+        error: 'Invalid session',
+        message: 'Session has expired or is invalid'
+      });
+    }
+
+    // Get user details
+    const userResult = await db.query(`
+      SELECT id, email, first_name, last_name, role, is_active
+      FROM users 
+      WHERE id = $1 AND is_active = true
+    `, [decoded.id]);
+
+    if (userResult.rows.length === 0) {
+      return res.status(401).json({
+        error: 'User not found',
+        message: 'User account not found or inactive'
+      });
+    }
+
+    const user = userResult.rows[0];
+
+    // Generate new tokens
+    const { accessToken, refreshToken: newRefreshToken, jti } = generateTokens(user);
+
+    // Remove old session and create new one
+    await db.query('DELETE FROM user_sessions WHERE token_jti = $1', [decoded.jti]);
+    
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+    await db.query(
+      'INSERT INTO user_sessions (user_id, token_jti, expires_at) VALUES ($1, $2, $3)',
+      [user.id, jti, expiresAt]
+    );
+
+    logger.info(`Token refreshed successfully: ${user.email}`);
+
     res.json({
       success: true,
-      data: {
-        user: {
-          id: user._id,
-          username: user.username,
-          email: user.email,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          role: user.role,
-          lastLogin: user.lastLogin,
-          createdAt: user.createdAt,
-        }
+      message: 'Token refreshed successfully',
+      tokens: {
+        accessToken,
+        refreshToken: newRefreshToken,
+        expiresIn: JWT_EXPIRES_IN
       }
     });
 
   } catch (error) {
-    logger.error('Get profile error:', error);
+    if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
+      return res.status(401).json({
+        error: 'Invalid refresh token',
+        message: 'The refresh token is invalid or expired'
+      });
+    }
+
+    req.app.locals.logger.error('Token refresh error:', error);
     res.status(500).json({
-      success: false,
-      message: 'Failed to get user profile'
+      error: 'Token refresh failed',
+      message: 'An internal error occurred during token refresh'
     });
   }
 });
 
-// OAuth2 Google login
-router.get('/google', 
-  passport.authenticate('google', { scope: ['profile', 'email'] })
-);
+// Token validation endpoint (for other services)
+router.post('/validate', async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    const { token } = req.body;
 
-router.get('/google/callback',
-  passport.authenticate('google', { failureRedirect: '/login' }),
-  async (req, res) => {
-    try {
-      const tokens = generateTokens(req.user);
-      
-      // Redirect to frontend with tokens
-      const redirectUrl = `${process.env.FRONTEND_URL}/auth/callback?token=${tokens.accessToken}&refresh=${tokens.refreshToken}`;
-      res.redirect(redirectUrl);
-    } catch (error) {
-      logger.error('Google OAuth callback error:', error);
-      res.redirect(`${process.env.FRONTEND_URL}/login?error=oauth_failed`);
+    if (!token) {
+      return res.status(400).json({
+        error: 'Token required',
+        message: 'Token must be provided for validation'
+      });
     }
-  }
-);
 
-// OAuth2 GitHub login
-router.get('/github',
-  passport.authenticate('github', { scope: ['user:email'] })
-);
+    // Verify token
+    const decoded = jwt.verify(token, JWT_SECRET);
 
-router.get('/github/callback',
-  passport.authenticate('github', { failureRedirect: '/login' }),
-  async (req, res) => {
-    try {
-      const tokens = generateTokens(req.user);
-      
-      // Redirect to frontend with tokens
-      const redirectUrl = `${process.env.FRONTEND_URL}/auth/callback?token=${tokens.accessToken}&refresh=${tokens.refreshToken}`;
-      res.redirect(redirectUrl);
-    } catch (error) {
-      logger.error('GitHub OAuth callback error:', error);
-      res.redirect(`${process.env.FRONTEND_URL}/login?error=oauth_failed`);
+    // Check if session is still valid
+    const sessionResult = await db.query(
+      'SELECT user_id FROM user_sessions WHERE token_jti = $1 AND expires_at > NOW()',
+      [decoded.jti]
+    );
+
+    if (sessionResult.rows.length === 0) {
+      return res.status(401).json({
+        valid: false,
+        error: 'Session expired'
+      });
     }
+
+    res.json({
+      valid: true,
+      user: {
+        id: decoded.id,
+        email: decoded.email,
+        role: decoded.role
+      }
+    });
+
+  } catch (error) {
+    if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
+      return res.json({
+        valid: false,
+        error: 'Invalid or expired token'
+      });
+    }
+
+    req.app.locals.logger.error('Token validation error:', error);
+    res.status(500).json({
+      error: 'Validation failed',
+      message: 'An internal error occurred during token validation'
+    });
   }
-);
+});
 
 module.exports = router;

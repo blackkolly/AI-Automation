@@ -1,28 +1,28 @@
 const http = require('http');
 
 const options = {
-  hostname: 'localhost',
-  port: process.env.PORT || 3002,
-  path: '/health',
-  method: 'GET',
-  timeout: 2000,
+    hostname: 'localhost',
+    port: process.env.PORT || 3003,
+    path: '/health',
+    method: 'GET',
+    timeout: 2000
 };
 
-const request = http.request(options, (res) => {
-  if (res.statusCode === 200) {
-    process.exit(0);
-  } else {
+const req = http.request(options, (res) => {
+    if (res.statusCode === 200) {
+        process.exit(0);
+    } else {
+        process.exit(1);
+    }
+});
+
+req.on('error', () => {
     process.exit(1);
-  }
 });
 
-request.on('error', () => {
-  process.exit(1);
+req.on('timeout', () => {
+    req.destroy();
+    process.exit(1);
 });
 
-request.on('timeout', () => {
-  request.destroy();
-  process.exit(1);
-});
-
-request.end();
+req.end();

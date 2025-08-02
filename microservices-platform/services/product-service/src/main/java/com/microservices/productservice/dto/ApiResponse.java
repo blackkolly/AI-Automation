@@ -1,64 +1,56 @@
 package com.microservices.productservice.dto;
 
-import com.fasterxml.jackson.annotation.JsonInclude;
-import com.fasterxml.jackson.annotation.JsonProperty;
-
 import java.time.LocalDateTime;
 
-@JsonInclude(JsonInclude.Include.NON_NULL)
+/**
+ * Generic API Response DTO
+ * 
+ * Standardized response format for all API endpoints.
+ * Provides consistent structure for success and error responses.
+ * 
+ * @author Microservices Platform Team
+ */
 public class ApiResponse<T> {
 
-    @JsonProperty("success")
     private boolean success;
-
-    @JsonProperty("message")
     private String message;
-
-    @JsonProperty("data")
     private T data;
-
-    @JsonProperty("timestamp")
     private LocalDateTime timestamp;
 
-    @JsonProperty("error")
-    private String error;
-
+    // Default constructor
     public ApiResponse() {
         this.timestamp = LocalDateTime.now();
     }
 
+    // Constructor with all fields
     public ApiResponse(boolean success, String message, T data) {
-        this();
         this.success = success;
         this.message = message;
         this.data = data;
+        this.timestamp = LocalDateTime.now();
     }
 
-    public ApiResponse(boolean success, String message, T data, String error) {
-        this();
-        this.success = success;
-        this.message = message;
-        this.data = data;
-        this.error = error;
-    }
-
-    public static <T> ApiResponse<T> success(T data, String message) {
+    // Success response factory method
+    public static <T> ApiResponse<T> success(String message, T data) {
         return new ApiResponse<>(true, message, data);
     }
 
-    public static <T> ApiResponse<T> success(T data) {
-        return new ApiResponse<>(true, "Operation successful", data);
+    // Success response without data
+    public static <T> ApiResponse<T> success(String message) {
+        return new ApiResponse<>(true, message, null);
     }
 
+    // Error response factory method
     public static <T> ApiResponse<T> error(String message) {
-        return new ApiResponse<>(false, message, null, message);
+        return new ApiResponse<>(false, message, null);
     }
 
-    public static <T> ApiResponse<T> error(String message, String error) {
-        return new ApiResponse<>(false, message, null, error);
+    // Error response with data
+    public static <T> ApiResponse<T> error(String message, T data) {
+        return new ApiResponse<>(false, message, data);
     }
 
-    // Getters and setters
+    // Getters and Setters
     public boolean isSuccess() {
         return success;
     }
@@ -91,11 +83,13 @@ public class ApiResponse<T> {
         this.timestamp = timestamp;
     }
 
-    public String getError() {
-        return error;
-    }
-
-    public void setError(String error) {
-        this.error = error;
+    @Override
+    public String toString() {
+        return "ApiResponse{" +
+                "success=" + success +
+                ", message='" + message + '\'' +
+                ", data=" + data +
+                ", timestamp=" + timestamp +
+                '}';
     }
 }

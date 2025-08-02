@@ -1,45 +1,57 @@
 const jwt = require('jsonwebtoken');
 const logger = require('../utils/logger');
 
-const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+const authMiddleware = (req, res, next) => {
+    try {
+        const authHeader = req.headers.authorization;
+        
+        if (!authHeader) {
+            return res.status(401).json({
+                error: 'Authorization header missing'
+            });
+        }
 
-  if (!token) {
-    return res.status(401).json({ error: 'Access token required' });
-  }
+        const token = authHeader.startsWith('Bearer ') 
+            ? authHeader.slice(7) 
+            : authHeader;
 
-  jwt.verify(token, process.env.JWT_SECRET || 'your-super-secret-jwt-key-for-development', (err, user) => {
-    if (err) {
-      logger.warn('Invalid token attempt:', err.message);
-      return res.status(403).json({ error: 'Invalid or expired token' });
+        if (!token) {
+            return res.status(401).json({
+                error: 'Token missing'
+            });
+        }
+
+        // Verify JWT token
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
+        
+        // Add user info to request
+        req.user = {
+            id: decoded.id || decoded.userId,
+            email: decoded.email,
+            role: decoded.role || 'user'
+        };
+
+        logger.info(`Authenticated user: ${req.user.id}`);
+        next();
+    } catch (error) {
+        logger.error('Authentication error:', error);
+        
+        if (error.name === 'JsonWebTokenError') {
+            return res.status(401).json({
+                error: 'Invalid token'
+            });
+        }
+        
+        if (error.name === 'TokenExpiredError') {
+            return res.status(401).json({
+                error: 'Token expired'
+            });
+        }
+
+        return res.status(500).json({
+            error: 'Authentication failed'
+        });
     }
-    
-    req.user = user;
-    next();
-  });
 };
 
-const optionalAuth = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-
-  if (!token) {
-    req.user = null;
-    return next();
-  }
-
-  jwt.verify(token, process.env.JWT_SECRET || 'your-super-secret-jwt-key-for-development', (err, user) => {
-    if (err) {
-      req.user = null;
-    } else {
-      req.user = user;
-    }
-    next();
-  });
-};
-
-module.exports = {
-  authenticateToken,
-  optionalAuth
-};
+module.exports = authMiddleware;
