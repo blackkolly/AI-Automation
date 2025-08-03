@@ -45,6 +45,10 @@ spec:
     kind: PersistentVolumeClaim
   - group: autoscaling
     kind: HorizontalPodAutoscaler
+  - group: rbac.authorization.k8s.io
+    kind: ClusterRole
+  - group: rbac.authorization.k8s.io
+    kind: ClusterRoleBinding
   namespaceResourceWhitelist:
   - group: ''
     kind: Pod
@@ -58,6 +62,12 @@ spec:
     kind: Deployment
   - group: apps
     kind: ReplicaSet
+  - group: apps
+    kind: StatefulSet
+  - group: apps
+    kind: DaemonSet
+  - group: ''
+    kind: ServiceAccount
   - group: networking.k8s.io
     kind: Ingress
   - group: autoscaling
