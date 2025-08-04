@@ -1,0 +1,138 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: jaeger-collector
+  namespace: observability
+  labels:
+    app: jaeger
+    component: collector
+spec:
+  selector:
+    matchLabels:
+      app: jaeger
+      component: collector
+  endpoints:
+  - port: admin-http
+    interval: 30s
+    path: /metrics
+  - port: metrics
+    interval: 30s
+    path: /metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: jaeger-query
+  namespace: observability
+  labels:
+    app: jaeger
+    component: query
+spec:
+  selector:
+    matchLabels:
+      app: jaeger
+      component: query
+  endpoints:
+  - port: admin-http
+    interval: 30s
+    path: /metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: jaeger-agent
+  namespace: observability
+  labels:
+    app: jaeger
+    component: agent
+spec:
+  selector:
+    matchLabels:
+      app: jaeger
+      component: agent
+  endpoints:
+  - port: admin-http
+    interval: 30s
+    path: /metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: otel-collector
+  namespace: observability
+  labels:
+    app: otel-collector
+spec:
+  selector:
+    matchLabels:
+      app: otel-collector
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+  - port: prometheus-exporter
+    interval: 30s
+    path: /metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: jaeger-alerts
+  namespace: observability
+spec:
+  groups:
+  - name: jaeger.rules
+    rules:
+    - alert: JaegerCollectorDown
+      expr: up{job="jaeger-collector"} == 0
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Jaeger Collector is down"
+        description: "Jaeger Collector has been down for more than 5 minutes."
+    
+    - alert: JaegerQueryDown
+      expr: up{job="jaeger-query"} == 0
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Jaeger Query is down"
+        description: "Jaeger Query has been down for more than 5 minutes."
+    
+    - alert: HighTraceIngestionRate
+      expr: rate(jaeger_collector_traces_received_total[5m]) > 1000
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High trace ingestion rate"
+        description: "Jaeger is receiving traces at {{ $value }} traces/sec, which is above the threshold."
+    
+    - alert: TracesDropped
+      expr: rate(jaeger_collector_traces_dropped_total[5m]) > 0
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Traces are being dropped"
+        description: "Jaeger Collector is dropping {{ $value }} traces/sec."
+    
+    - alert: OtelCollectorDown
+      expr: up{job="otel-collector"} == 0
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "OpenTelemetry Collector is down"
+        description: "OpenTelemetry Collector has been down for more than 5 minutes."
+    
+    - alert: HighOtelMemoryUsage
+      expr: otelcol_process_memory_rss / 1024 / 1024 > 400
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High OpenTelemetry Collector memory usage"
+        description: "OpenTelemetry Collector memory usage is {{ $value }}MB, above 400MB threshold."

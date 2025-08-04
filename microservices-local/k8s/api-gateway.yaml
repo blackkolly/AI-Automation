@@ -1,0 +1,140 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  labels:
+    app: api-gateway
+    monitoring: prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api-gateway
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+        monitoring: prometheus
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: api-gateway
+        image: node:18-alpine
+        command: ["sh", "-c"]
+        args:
+          - |
+            npm install express prom-client jaeger-client opentracing
+            cat > app.js << 'EOF'
+            const express = require('express');
+            const client = require('prom-client');
+            const jaeger = require('jaeger-client');
+
+            const app = express();
+            const register = new client.Registry();
+            
+            // Metrics
+            const httpRequestsTotal = new client.Counter({
+              name: 'http_requests_total',
+              help: 'Total HTTP requests',
+              labelNames: ['method', 'route', 'status'],
+              registers: [register]
+            });
+
+            const httpRequestDuration = new client.Histogram({
+              name: 'http_request_duration_seconds',
+              help: 'HTTP request duration',
+              labelNames: ['method', 'route'],
+              registers: [register]
+            });
+
+            // Jaeger tracing
+            const config = {
+              serviceName: 'api-gateway',
+              reporter: {
+                collectorEndpoint: 'http://jaeger-collector.observability.svc.cluster.local:14268/api/traces'
+              }
+            };
+            const tracer = jaeger.initTracer(config);
+
+            // Middleware
+            app.use((req, res, next) => {
+              const start = Date.now();
+              res.on('finish', () => {
+                const duration = (Date.now() - start) / 1000;
+                httpRequestsTotal.inc({ method: req.method, route: req.path, status: res.statusCode });
+                httpRequestDuration.observe({ method: req.method, route: req.path }, duration);
+              });
+              next();
+            });
+
+            // Routes
+            app.get('/health', (req, res) => {
+              res.json({ service: 'api-gateway', status: 'healthy', timestamp: new Date().toISOString() });
+            });
+
+            app.get('/metrics', (req, res) => {
+              res.set('Content-Type', register.contentType);
+              res.end(register.metrics());
+            });
+
+            app.get('/api/status', (req, res) => {
+              res.json({ 
+                message: 'API Gateway is running locally!',
+                services: {
+                  auth: 'http://auth-service:3001',
+                  products: 'http://product-service:3002',
+                  orders: 'http://order-service:3003'
+                }
+              });
+            });
+
+            // Start servers
+            app.listen(3000, () => console.log('API Gateway listening on port 3000'));
+            
+            // Metrics server
+            const metricsApp = express();
+            metricsApp.get('/metrics', (req, res) => {
+              res.set('Content-Type', register.contentType);
+              res.end(register.metrics());
+            });
+            metricsApp.listen(9090, () => console.log('Metrics server listening on port 9090'));
+            EOF
+            
+            node app.js
+        ports:
+        - containerPort: 3000
+          name: http
+        - containerPort: 9090
+          name: metrics
+        env:
+        - name: SERVICE_NAME
+          value: "api-gateway"
+        - name: ENABLE_METRICS
+          value: "true"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+  labels:
+    app: api-gateway
+    monitoring: prometheus
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+    prometheus.io/path: "/metrics"
+spec:
+  type: NodePort
+  ports:
+  - port: 3000
+    targetPort: 3000
+    nodePort: 30000
+    name: http
+  - port: 9090
+    targetPort: 9090
+    name: metrics
+  selector:
+    app: api-gateway

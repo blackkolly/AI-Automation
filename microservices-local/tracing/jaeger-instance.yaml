@@ -1,0 +1,111 @@
+apiVersion: jaegertracing.io/v1
+kind: Jaeger
+metadata:
+  name: jaeger
+  namespace: observability
+spec:
+  strategy: production
+  storage:
+    type: elasticsearch
+    elasticsearch:
+      nodeCount: 1
+      storage:
+        storageClassName: standard
+        size: 10Gi
+      redundancyPolicy: ZeroRedundancy
+      esIndexCleaner:
+        enabled: true
+        numberOfDays: 7
+        schedule: "55 23 * * *"
+  collector:
+    replicas: 2
+    resources:
+      limits:
+        memory: 512Mi
+        cpu: 500m
+      requests:
+        memory: 256Mi
+        cpu: 250m
+    config: |
+      receivers:
+        jaeger:
+          protocols:
+            grpc:
+              endpoint: 0.0.0.0:14250
+            thrift_http:
+              endpoint: 0.0.0.0:14268
+            thrift_compact:
+              endpoint: 0.0.0.0:6831
+            thrift_binary:
+              endpoint: 0.0.0.0:6832
+        otlp:
+          protocols:
+            grpc:
+              endpoint: 0.0.0.0:4317
+            http:
+              endpoint: 0.0.0.0:4318
+      processors:
+        batch:
+          timeout: 1s
+          send_batch_size: 1024
+        memory_limiter:
+          limit_mib: 400
+      exporters:
+        jaeger:
+          endpoint: jaeger-collector:14250
+          tls:
+            insecure: true
+      service:
+        pipelines:
+          traces:
+            receivers: [jaeger, otlp]
+            processors: [memory_limiter, batch]
+            exporters: [jaeger]
+  query:
+    replicas: 2
+    resources:
+      limits:
+        memory: 512Mi
+        cpu: 500m
+      requests:
+        memory: 256Mi
+        cpu: 250m
+  agent:
+    strategy: DaemonSet
+    resources:
+      limits:
+        memory: 128Mi
+        cpu: 100m
+      requests:
+        memory: 64Mi
+        cpu: 50m
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger-collector-headless
+  namespace: observability
+  labels:
+    app: jaeger
+    component: collector
+spec:
+  clusterIP: None
+  selector:
+    app: jaeger
+    component: collector
+  ports:
+  - name: jaeger-collector-tchannel
+    port: 14267
+    targetPort: 14267
+  - name: jaeger-collector-http
+    port: 14268
+    targetPort: 14268
+  - name: jaeger-collector-grpc
+    port: 14250
+    targetPort: 14250
+  - name: otlp-grpc
+    port: 4317
+    targetPort: 4317
+  - name: otlp-http
+    port: 4318
+    targetPort: 4318

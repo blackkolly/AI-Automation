@@ -1,0 +1,71 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionWebhook
+metadata:
+  name: microservices-validator
+webhooks:
+- name: validate-microservices.example.com
+  clientConfig:
+    service:
+      name: admission-webhook
+      namespace: microservices
+      path: "/validate"
+  rules:
+  - operations: ["CREATE", "UPDATE"]
+    apiGroups: ["apps"]
+    apiVersions: ["v1"]
+    resources: ["deployments"]
+  namespaceSelector:
+    matchLabels:
+      name: microservices
+  admissionReviewVersions: ["v1", "v1beta1"]
+  sideEffects: None
+  failurePolicy: Fail
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionWebhook
+metadata:
+  name: microservices-mutator
+webhooks:
+- name: mutate-microservices.example.com
+  clientConfig:
+    service:
+      name: admission-webhook
+      namespace: microservices
+      path: "/mutate"
+  rules:
+  - operations: ["CREATE"]
+    apiGroups: [""]
+    apiVersions: ["v1"]
+    resources: ["pods"]
+  namespaceSelector:
+    matchLabels:
+      name: microservices
+  admissionReviewVersions: ["v1", "v1beta1"]
+  sideEffects: None
+  failurePolicy: Fail
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: admission-config
+  namespace: microservices
+data:
+  config.yaml: |
+    validation:
+      rules:
+        - name: "require-security-context"
+          message: "Security context is required"
+          check: ".spec.template.spec.securityContext != null"
+        - name: "no-privileged-containers"
+          message: "Privileged containers are not allowed"
+          check: ".spec.template.spec.containers[].securityContext.privileged != true"
+        - name: "require-resource-limits"
+          message: "Resource limits are required"
+          check: ".spec.template.spec.containers[].resources.limits != null"
+    mutation:
+      rules:
+        - name: "add-security-labels"
+          patch: |
+            - op: add
+              path: /metadata/labels/security.microservices.io~1scanned
+              value: "true"

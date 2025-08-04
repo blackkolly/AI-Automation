@@ -1,2 +1,36 @@
 akas/backend/.env
 akas/backend/.env
+
+# Terraform files
+**/.terraform/
+**/.terraform.lock.hcl
+**/terraform.tfstate
+**/terraform.tfstate.backup
+**/terraform.tfvars
+**/.terraform/providers/
+
+# Large log files
+**/*.log
+**/logs/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Node modules
+**/node_modules/
+
+# Python cache
+**/__pycache__/
+**/*.pyc
+
+# Large binaries
+**/*.exe
+**/*.dll
+**/*.so

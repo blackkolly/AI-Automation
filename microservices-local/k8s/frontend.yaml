@@ -1,0 +1,861 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: microservices
+  labels:
+    app: frontend
+    tier: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+        tier: frontend
+    spec:
+      containers:
+      - name: frontend
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+          name: http
+        volumeMounts:
+        - name: html-content
+          mountPath: /usr/share/nginx/html
+        - name: nginx-config
+          mountPath: /etc/nginx/nginx.conf
+          subPath: nginx.conf
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 80
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: html-content
+        configMap:
+          name: frontend-html
+      - name: nginx-config
+        configMap:
+          name: frontend-nginx-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: microservices
+  labels:
+    app: frontend
+spec:
+  type: NodePort
+  ports:
+  - port: 80
+    targetPort: 80
+    nodePort: 30080
+    name: http
+  selector:
+    app: frontend
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frontend-html
+  namespace: microservices
+data:
+  index.html: |
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Microservices Platform - Dashboard</title>
+        <link rel="stylesheet" href="styles.css">
+        <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    </head>
+    <body>
+        <div id="app">
+            <header class="header">
+                <div class="container">
+                    <h1><i class="fas fa-cube"></i> Microservices Platform</h1>
+                    <nav>
+                        <button id="servicesBtn" class="nav-btn active">Services</button>
+                        <button id="productsBtn" class="nav-btn">Products</button>
+                        <button id="ordersBtn" class="nav-btn">Orders</button>
+                        <button id="monitoringBtn" class="nav-btn">Monitoring</button>
+                    </nav>
+                </div>
+            </header>
+
+            <main class="main">
+                <div class="container">
+                    <div id="servicesSection" class="section active">
+                        <h2><i class="fas fa-server"></i> Service Health Status</h2>
+                        <div class="service-grid">
+                            <div class="service-card" id="api-gateway-card">
+                                <div class="service-header">
+                                    <h3>API Gateway</h3>
+                                    <span class="status-indicator" id="api-gateway-status">●</span>
+                                </div>
+                                <p>Main entry point for all requests</p>
+                                <div class="service-info">
+                                    <span>Port: 30000</span>
+                                    <button onclick="testService('api-gateway', 'http://localhost:30000/health')">Test</button>
+                                </div>
+                            </div>
+
+                            <div class="service-card" id="auth-service-card">
+                                <div class="service-header">
+                                    <h3>Auth Service</h3>
+                                    <span class="status-indicator" id="auth-service-status">●</span>
+                                </div>
+                                <p>User authentication and authorization</p>
+                                <div class="service-info">
+                                    <span>Port: 30001</span>
+                                    <button onclick="testService('auth-service', 'http://localhost:30001/health')">Test</button>
+                                </div>
+                            </div>
+
+                            <div class="service-card" id="product-service-card">
+                                <div class="service-header">
+                                    <h3>Product Service</h3>
+                                    <span class="status-indicator" id="product-service-status">●</span>
+                                </div>
+                                <p>Product catalog management</p>
+                                <div class="service-info">
+                                    <span>Port: 30002</span>
+                                    <button onclick="testService('product-service', 'http://localhost:30002/health')">Test</button>
+                                </div>
+                            </div>
+
+                            <div class="service-card" id="order-service-card">
+                                <div class="service-header">
+                                    <h3>Order Service</h3>
+                                    <span class="status-indicator" id="order-service-status">●</span>
+                                </div>
+                                <p>Order processing and management</p>
+                                <div class="service-info">
+                                    <span>Port: 30003</span>
+                                    <button onclick="testService('order-service', 'http://localhost:30003/health')">Test</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="productsSection" class="section">
+                        <h2><i class="fas fa-box"></i> Product Catalog</h2>
+                        <button onclick="loadProducts()" class="btn primary">Load Products</button>
+                        <div id="products-list" class="products-grid"></div>
+                    </div>
+
+                    <div id="ordersSection" class="section">
+                        <h2><i class="fas fa-shopping-cart"></i> Orders</h2>
+                        <button onclick="loadOrders()" class="btn primary">Load Orders</button>
+                        <div id="orders-list" class="orders-grid"></div>
+                    </div>
+
+                    <div id="monitoringSection" class="section">
+                        <h2><i class="fas fa-chart-line"></i> Monitoring & Observability</h2>
+                        <div class="monitoring-grid">
+                            <div class="monitoring-card">
+                                <h3><i class="fas fa-tachometer-alt"></i> Grafana</h3>
+                                <p>Metrics visualization and dashboards</p>
+                                <a href="http://localhost:30300" target="_blank" class="btn secondary">Open Grafana</a>
+                                <small>admin / prom-operator</small>
+                            </div>
+                            <div class="monitoring-card">
+                                <h3><i class="fas fa-fire"></i> Prometheus</h3>
+                                <p>Metrics collection and storage</p>
+                                <a href="http://localhost:30090" target="_blank" class="btn secondary">Open Prometheus</a>
+                            </div>
+                            <div class="monitoring-card">
+                                <h3><i class="fas fa-search"></i> Jaeger</h3>
+                                <p>Distributed tracing and monitoring</p>
+                                <a href="http://localhost:30686" target="_blank" class="btn secondary">Open Jaeger</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </main>
+
+            <footer class="footer">
+                <div class="container">
+                    <p>&copy; 2025 Microservices Platform - Learning Environment</p>
+                    <div class="system-status">
+                        <span id="system-status">System Status: <span id="overall-status">Checking...</span></span>
+                    </div>
+                </div>
+            </footer>
+        </div>
+
+        <script src="app.js"></script>
+    </body>
+    </html>
+  styles.css: |
+    /* Reset and base styles */
+    * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+    }
+
+    body {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        line-height: 1.6;
+        color: #333;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+    }
+
+    .container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 0 20px;
+    }
+
+    /* Header */
+    .header {
+        background: rgba(255, 255, 255, 0.1);
+        backdrop-filter: blur(10px);
+        padding: 1rem 0;
+        box-shadow: 0 2px 20px rgba(0, 0, 0, 0.1);
+    }
+
+    .header .container {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .header h1 {
+        color: white;
+        font-size: 1.8rem;
+        font-weight: 600;
+    }
+
+    .header h1 i {
+        margin-right: 10px;
+        color: #4CAF50;
+    }
+
+    nav {
+        display: flex;
+        gap: 10px;
+    }
+
+    .nav-btn {
+        background: transparent;
+        border: 2px solid rgba(255, 255, 255, 0.3);
+        color: white;
+        padding: 8px 16px;
+        border-radius: 25px;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        font-weight: 500;
+    }
+
+    .nav-btn:hover, .nav-btn.active {
+        background: rgba(255, 255, 255, 0.2);
+        border-color: rgba(255, 255, 255, 0.8);
+        transform: translateY(-2px);
+    }
+
+    /* Main content */
+    .main {
+        padding: 2rem 0;
+        min-height: calc(100vh - 160px);
+    }
+
+    .section {
+        display: none;
+        background: rgba(255, 255, 255, 0.95);
+        border-radius: 15px;
+        padding: 2rem;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        backdrop-filter: blur(10px);
+    }
+
+    .section.active {
+        display: block;
+        animation: fadeIn 0.5s ease-in;
+    }
+
+    @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .section h2 {
+        color: #333;
+        margin-bottom: 1.5rem;
+        font-size: 1.5rem;
+        border-bottom: 3px solid #4CAF50;
+        padding-bottom: 10px;
+    }
+
+    .section h2 i {
+        margin-right: 10px;
+        color: #4CAF50;
+    }
+
+    /* Service grid */
+    .service-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 1.5rem;
+        margin-top: 1rem;
+    }
+
+    .service-card {
+        background: white;
+        border-radius: 10px;
+        padding: 1.5rem;
+        box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        transition: all 0.3s ease;
+        border-left: 4px solid #4CAF50;
+    }
+
+    .service-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+    }
+
+    .service-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+    }
+
+    .service-header h3 {
+        color: #333;
+        font-size: 1.2rem;
+    }
+
+    .status-indicator {
+        font-size: 1.5rem;
+        color: #f44336;
+        transition: color 0.3s ease;
+    }
+
+    .status-indicator.healthy {
+        color: #4CAF50;
+    }
+
+    .status-indicator.warning {
+        color: #ff9800;
+    }
+
+    .service-info {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-top: 15px;
+        padding-top: 15px;
+        border-top: 1px solid #eee;
+    }
+
+    .service-info span {
+        color: #666;
+        font-size: 0.9rem;
+    }
+
+    /* Products and Orders */
+    .products-grid, .orders-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 1rem;
+        margin-top: 1rem;
+    }
+
+    .product-card, .order-card {
+        background: white;
+        border-radius: 8px;
+        padding: 1rem;
+        box-shadow: 0 3px 10px rgba(0, 0, 0, 0.1);
+        border-left: 3px solid #2196F3;
+    }
+
+    .product-card h4, .order-card h4 {
+        color: #333;
+        margin-bottom: 8px;
+    }
+
+    .price {
+        color: #4CAF50;
+        font-weight: bold;
+        font-size: 1.1rem;
+    }
+
+    /* Monitoring grid */
+    .monitoring-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 1.5rem;
+        margin-top: 1rem;
+    }
+
+    .monitoring-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border-radius: 10px;
+        padding: 1.5rem;
+        text-align: center;
+        box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+        transition: transform 0.3s ease;
+    }
+
+    .monitoring-card:hover {
+        transform: translateY(-5px);
+    }
+
+    .monitoring-card h3 {
+        margin-bottom: 10px;
+        font-size: 1.3rem;
+    }
+
+    .monitoring-card i {
+        margin-right: 8px;
+    }
+
+    .monitoring-card p {
+        margin-bottom: 15px;
+        opacity: 0.9;
+    }
+
+    .monitoring-card small {
+        display: block;
+        margin-top: 8px;
+        opacity: 0.7;
+        font-size: 0.8rem;
+    }
+
+    /* Buttons */
+    .btn {
+        background: #4CAF50;
+        color: white;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 5px;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        text-decoration: none;
+        display: inline-block;
+        font-size: 0.9rem;
+    }
+
+    .btn:hover {
+        background: #45a049;
+        transform: translateY(-1px);
+    }
+
+    .btn.secondary {
+        background: rgba(255, 255, 255, 0.2);
+        border: 1px solid rgba(255, 255, 255, 0.3);
+    }
+
+    .btn.secondary:hover {
+        background: rgba(255, 255, 255, 0.3);
+    }
+
+    .btn.primary {
+        background: #2196F3;
+        margin-bottom: 1rem;
+    }
+
+    .btn.primary:hover {
+        background: #1976D2;
+    }
+
+    /* Footer */
+    .footer {
+        background: rgba(0, 0, 0, 0.1);
+        backdrop-filter: blur(10px);
+        color: white;
+        padding: 1rem 0;
+        margin-top: auto;
+    }
+
+    .footer .container {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .system-status {
+        font-size: 0.9rem;
+    }
+
+    #overall-status {
+        font-weight: bold;
+    }
+
+    #overall-status.healthy {
+        color: #4CAF50;
+    }
+
+    #overall-status.error {
+        color: #f44336;
+    }
+
+    #overall-status.warning {
+        color: #ff9800;
+    }
+
+    /* Loading animation */
+    .loading {
+        display: inline-block;
+        width: 20px;
+        height: 20px;
+        border: 3px solid #f3f3f3;
+        border-top: 3px solid #3498db;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+
+    /* Responsive design */
+    @media (max-width: 768px) {
+        .header .container {
+            flex-direction: column;
+            gap: 1rem;
+        }
+        
+        .footer .container {
+            flex-direction: column;
+            gap: 0.5rem;
+            text-align: center;
+        }
+        
+        .service-grid {
+            grid-template-columns: 1fr;
+        }
+        
+        .monitoring-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+  app.js: |
+    // Frontend Application for Microservices Platform
+    class MicroservicesDashboard {
+        constructor() {
+            this.services = [
+                { name: 'api-gateway', url: 'http://localhost:30000/health', port: 30000 },
+                { name: 'auth-service', url: 'http://localhost:30001/health', port: 30001 },
+                { name: 'product-service', url: 'http://localhost:30002/health', port: 30002 },
+                { name: 'order-service', url: 'http://localhost:30003/health', port: 30003 }
+            ];
+            
+            this.init();
+            this.startHealthChecks();
+        }
+
+        init() {
+            // Navigation
+            document.getElementById('servicesBtn').addEventListener('click', () => this.showSection('servicesSection'));
+            document.getElementById('productsBtn').addEventListener('click', () => this.showSection('productsSection'));
+            document.getElementById('ordersBtn').addEventListener('click', () => this.showSection('ordersSection'));
+            document.getElementById('monitoringBtn').addEventListener('click', () => this.showSection('monitoringSection'));
+
+            // Initial health check
+            this.checkAllServices();
+        }
+
+        showSection(sectionId) {
+            // Hide all sections
+            document.querySelectorAll('.section').forEach(section => {
+                section.classList.remove('active');
+            });
+
+            // Remove active class from all nav buttons
+            document.querySelectorAll('.nav-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+
+            // Show selected section
+            document.getElementById(sectionId).classList.add('active');
+
+            // Add active class to corresponding button
+            const btnMap = {
+                'servicesSection': 'servicesBtn',
+                'productsSection': 'productsBtn', 
+                'ordersSection': 'ordersBtn',
+                'monitoringSection': 'monitoringBtn'
+            };
+            document.getElementById(btnMap[sectionId]).classList.add('active');
+        }
+
+        async checkAllServices() {
+            let healthyCount = 0;
+            let totalServices = this.services.length;
+
+            for (const service of this.services) {
+                try {
+                    const isHealthy = await this.checkServiceHealth(service.name, service.url);
+                    if (isHealthy) healthyCount++;
+                } catch (error) {
+                    console.warn(`Health check failed for ${service.name}:`, error);
+                }
+            }
+
+            this.updateOverallStatus(healthyCount, totalServices);
+        }
+
+        async checkServiceHealth(serviceName, url) {
+            try {
+                const response = await fetch(url, {
+                    method: 'GET',
+                    mode: 'cors',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                });
+
+                const isHealthy = response.ok;
+                this.updateServiceStatus(serviceName, isHealthy);
+                return isHealthy;
+            } catch (error) {
+                console.warn(`Service ${serviceName} is not accessible:`, error);
+                this.updateServiceStatus(serviceName, false);
+                return false;
+            }
+        }
+
+        updateServiceStatus(serviceName, isHealthy) {
+            const statusElement = document.getElementById(`${serviceName}-status`);
+            const cardElement = document.getElementById(`${serviceName}-card`);
+            
+            if (statusElement) {
+                statusElement.className = `status-indicator ${isHealthy ? 'healthy' : 'error'}`;
+                statusElement.title = isHealthy ? 'Service is healthy' : 'Service is not responding';
+            }
+
+            if (cardElement) {
+                cardElement.style.borderLeftColor = isHealthy ? '#4CAF50' : '#f44336';
+            }
+        }
+
+        updateOverallStatus(healthyCount, totalServices) {
+            const statusElement = document.getElementById('overall-status');
+            
+            if (healthyCount === totalServices) {
+                statusElement.textContent = 'All Systems Operational';
+                statusElement.className = 'healthy';
+            } else if (healthyCount === 0) {
+                statusElement.textContent = 'All Systems Down';
+                statusElement.className = 'error';
+            } else {
+                statusElement.textContent = `${healthyCount}/${totalServices} Services Running`;
+                statusElement.className = 'warning';
+            }
+        }
+
+        startHealthChecks() {
+            // Check services every 30 seconds
+            setInterval(() => {
+                this.checkAllServices();
+            }, 30000);
+        }
+
+        async loadProducts() {
+            const productsContainer = document.getElementById('products-list');
+            productsContainer.innerHTML = '<div class="loading"></div>';
+
+            try {
+                const response = await fetch('http://localhost:30002/products');
+                if (response.ok) {
+                    const products = await response.json();
+                    this.displayProducts(products);
+                } else {
+                    throw new Error('Failed to fetch products');
+                }
+            } catch (error) {
+                productsContainer.innerHTML = `
+                    <div class="error-message">
+                        <p>Unable to load products. Make sure the Product Service is running.</p>
+                        <small>Error: ${error.message}</small>
+                    </div>
+                `;
+            }
+        }
+
+        displayProducts(products) {
+            const container = document.getElementById('products-list');
+            
+            if (!products || products.length === 0) {
+                container.innerHTML = '<p>No products available.</p>';
+                return;
+            }
+
+            container.innerHTML = products.map(product => `
+                <div class="product-card">
+                    <h4>${product.name}</h4>
+                    <p>Category: ${product.category}</p>
+                    <p class="price">$${product.price}</p>
+                    <small>ID: ${product.id}</small>
+                </div>
+            `).join('');
+        }
+
+        async loadOrders() {
+            const ordersContainer = document.getElementById('orders-list');
+            ordersContainer.innerHTML = '<div class="loading"></div>';
+
+            try {
+                const response = await fetch('http://localhost:30003/orders');
+                if (response.ok) {
+                    const orders = await response.json();
+                    this.displayOrders(orders);
+                } else {
+                    throw new Error('Failed to fetch orders');
+                }
+            } catch (error) {
+                ordersContainer.innerHTML = `
+                    <div class="error-message">
+                        <p>Unable to load orders. Make sure the Order Service is running.</p>
+                        <small>Error: ${error.message}</small>
+                    </div>
+                `;
+            }
+        }
+
+        displayOrders(orders) {
+            const container = document.getElementById('orders-list');
+            
+            if (!orders || orders.length === 0) {
+                container.innerHTML = '<p>No orders available.</p>';
+                return;
+            }
+
+            container.innerHTML = orders.map(order => `
+                <div class="order-card">
+                    <h4>Order #${order.id}</h4>
+                    <p>Customer: ${order.customer || 'N/A'}</p>
+                    <p>Status: ${order.status || 'Pending'}</p>
+                    <p class="price">$${order.total || '0.00'}</p>
+                    <small>Date: ${order.date || 'N/A'}</small>
+                </div>
+            `).join('');
+        }
+    }
+
+    // Global functions for inline event handlers
+    function testService(serviceName, url) {
+        const dashboard = window.dashboard;
+        dashboard.checkServiceHealth(serviceName, url);
+    }
+
+    function loadProducts() {
+        window.dashboard.loadProducts();
+    }
+
+    function loadOrders() {
+        window.dashboard.loadOrders();
+    }
+
+    // Initialize the dashboard when page loads
+    document.addEventListener('DOMContentLoaded', () => {
+        window.dashboard = new MicroservicesDashboard();
+        
+        // Show welcome message
+        console.log('🚀 Microservices Platform Dashboard Loaded');
+        console.log('🔗 Available endpoints:');
+        console.log('   • API Gateway: http://localhost:30000');
+        console.log('   • Auth Service: http://localhost:30001'); 
+        console.log('   • Product Service: http://localhost:30002');
+        console.log('   • Order Service: http://localhost:30003');
+        console.log('📊 Monitoring:');
+        console.log('   • Grafana: http://localhost:30300');
+        console.log('   • Prometheus: http://localhost:30090');
+        console.log('   • Jaeger: http://localhost:30686');
+    });
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frontend-nginx-config
+  namespace: microservices
+data:
+  nginx.conf: |
+    events {
+        worker_connections 1024;
+    }
+
+    http {
+        include       /etc/nginx/mime.types;
+        default_type  application/octet-stream;
+        
+        sendfile        on;
+        keepalive_timeout  65;
+        
+        # Enable gzip compression
+        gzip on;
+        gzip_vary on;
+        gzip_min_length 1024;
+        gzip_types text/plain text/css text/xml text/javascript application/javascript application/xml+rss application/json;
+
+        server {
+            listen 80;
+            server_name localhost;
+            
+            # Security headers
+            add_header X-Frame-Options "SAMEORIGIN" always;
+            add_header X-XSS-Protection "1; mode=block" always;
+            add_header X-Content-Type-Options "nosniff" always;
+            add_header Referrer-Policy "no-referrer-when-downgrade" always;
+            add_header Content-Security-Policy "default-src 'self' http: https: data: blob: 'unsafe-inline'" always;
+
+            # Root directory
+            root /usr/share/nginx/html;
+            index index.html;
+
+            # Enable CORS for API calls
+            location / {
+                try_files $uri $uri/ /index.html;
+                
+                # CORS headers
+                add_header 'Access-Control-Allow-Origin' '*' always;
+                add_header 'Access-Control-Allow-Methods' 'GET, POST, PUT, DELETE, OPTIONS' always;
+                add_header 'Access-Control-Allow-Headers' 'DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization' always;
+                add_header 'Access-Control-Expose-Headers' 'Content-Length,Content-Range' always;
+            }
+
+            # Handle preflight requests
+            location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg)$ {
+                expires 1y;
+                add_header Cache-Control "public, immutable";
+                try_files $uri =404;
+            }
+
+            # Health check endpoint
+            location /health {
+                access_log off;
+                return 200 '{"status":"healthy","service":"frontend","timestamp":"$time_iso8601"}\n';
+                add_header Content-Type application/json;
+            }
+
+            # Error pages
+            error_page 404 /index.html;
+            error_page 500 502 503 504 /index.html;
+        }
+    }

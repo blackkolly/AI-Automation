@@ -1,0 +1,187 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trace-sampling-config
+  namespace: observability
+data:
+  sampling.json: |
+    {
+      "service_strategies": [
+        {
+          "service": "frontend",
+          "type": "probabilistic",
+          "param": 0.1,
+          "max_traces_per_second": 100
+        },
+        {
+          "service": "api-gateway",
+          "type": "probabilistic", 
+          "param": 0.5,
+          "max_traces_per_second": 200
+        },
+        {
+          "service": "auth-service",
+          "type": "probabilistic",
+          "param": 0.8,
+          "max_traces_per_second": 150
+        },
+        {
+          "service": "user-service",
+          "type": "probabilistic",
+          "param": 0.3,
+          "max_traces_per_second": 100
+        }
+      ],
+      "default_strategy": {
+        "type": "probabilistic",
+        "param": 0.1,
+        "max_traces_per_second": 50
+      },
+      "per_operation_strategies": [
+        {
+          "operation": "GET /health",
+          "type": "probabilistic",
+          "param": 0.01
+        },
+        {
+          "operation": "GET /metrics",
+          "type": "probabilistic", 
+          "param": 0.01
+        },
+        {
+          "operation": "POST /auth/login",
+          "type": "probabilistic",
+          "param": 1.0
+        },
+        {
+          "operation": "POST /auth/register",
+          "type": "probabilistic",
+          "param": 1.0
+        }
+      ]
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaeger-sampling-config
+  namespace: observability
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jaeger-sampling-config
+  template:
+    metadata:
+      labels:
+        app: jaeger-sampling-config
+    spec:
+      containers:
+      - name: sampling-config-server
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: sampling-config
+          mountPath: /usr/share/nginx/html
+        - name: nginx-config
+          mountPath: /etc/nginx/conf.d
+      volumes:
+      - name: sampling-config
+        configMap:
+          name: trace-sampling-config
+      - name: nginx-config
+        configMap:
+          name: nginx-sampling-config
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-sampling-config
+  namespace: observability
+data:
+  default.conf: |
+    server {
+        listen 80;
+        server_name localhost;
+        
+        location /sampling {
+            alias /usr/share/nginx/html/;
+            try_files $uri $uri/ =404;
+            
+            add_header Access-Control-Allow-Origin *;
+            add_header Access-Control-Allow-Methods "GET, OPTIONS";
+            add_header Access-Control-Allow-Headers "Content-Type";
+        }
+        
+        location / {
+            return 200 'Jaeger Sampling Configuration Server';
+            add_header Content-Type text/plain;
+        }
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger-sampling-config
+  namespace: observability
+spec:
+  selector:
+    app: jaeger-sampling-config
+  ports:
+  - port: 80
+    targetPort: 80
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trace-analysis-config
+  namespace: observability
+data:
+  analysis.yaml: |
+    analyzers:
+      - name: latency-analyzer
+        type: latency
+        config:
+          thresholds:
+            warning: 500ms
+            critical: 2s
+          percentiles: [50, 95, 99]
+      
+      - name: error-rate-analyzer
+        type: error_rate
+        config:
+          thresholds:
+            warning: 0.05  # 5%
+            critical: 0.10 # 10%
+          window: 5m
+      
+      - name: throughput-analyzer
+        type: throughput
+        config:
+          thresholds:
+            low: 10  # requests per second
+            high: 1000
+          window: 1m
+      
+      - name: dependency-analyzer
+        type: dependencies
+        config:
+          max_depth: 5
+          include_external: true
+    
+    alerts:
+      - name: high-latency
+        condition: "latency_p99 > 2s"
+        severity: critical
+        webhook: "http://alertmanager:9093/api/v1/alerts"
+      
+      - name: high-error-rate
+        condition: "error_rate > 0.10"
+        severity: critical
+        webhook: "http://alertmanager:9093/api/v1/alerts"
+      
+      - name: low-throughput
+        condition: "throughput < 10"
+        severity: warning
+        webhook: "http://alertmanager:9093/api/v1/alerts"

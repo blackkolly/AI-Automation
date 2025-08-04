@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Microservices Platform Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .dashboard {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .status-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .card {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+
+        .card h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 1.2rem;
+        }
+
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #28a745;
+            animation: pulse 2s infinite;
+        }
+
+        .status-dot.loading {
+            background: #ffc107;
+        }
+
+        .status-dot.error {
+            background: #dc3545;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        .data-section {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        .data-card {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .data-card h3 {
+            color: #333;
+            margin-bottom: 15px;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+
+        .product-item, .order-item {
+            background: #f8f9fa;
+            margin-bottom: 10px;
+            padding: 15px;
+            border-radius: 10px;
+            border-left: 4px solid #667eea;
+        }
+
+        .product-item h4, .order-item h4 {
+            color: #333;
+            margin-bottom: 5px;
+        }
+
+        .product-price {
+            color: #28a745;
+            font-weight: bold;
+            font-size: 1.1rem;
+        }
+
+        .order-status {
+            padding: 4px 8px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: bold;
+        }
+
+        .status-shipped {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status-processing {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .status-delivered {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+
+        .refresh-btn {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 1rem;
+            margin: 10px 5px;
+            transition: transform 0.2s;
+        }
+
+        .refresh-btn:hover {
+            transform: translateY(-2px);
+        }
+
+        .error-message {
+            color: #dc3545;
+            font-size: 0.9rem;
+            margin-top: 5px;
+        }
+
+        @media (max-width: 768px) {
+            .data-section {
+                grid-template-columns: 1fr;
+            }
+            
+            .header h1 {
+                font-size: 2rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <header class="header">
+            <div class="container">
+                <h1><i class="fas fa-cube"></i> Microservices Platform</h1>
+                <nav>
+                    <button id="servicesBtn" class="nav-btn active">Services</button>
+                    <button id="productsBtn" class="nav-btn">Products</button>
+                    <button id="ordersBtn" class="nav-btn">Orders</button>
+                    <button id="monitoringBtn" class="nav-btn">Monitoring</button>
+                </nav>
+            </div>
+        </header>
+
+        <main class="main">
+            <div class="container">
+                <div id="servicesSection" class="section active">
+                    <h2><i class="fas fa-server"></i> Service Health Status</h2>
+                    <div class="service-grid">
+                        <div class="service-card" id="api-gateway-card">
+                            <div class="service-header">
+                                <h3>API Gateway</h3>
+                                <span class="status-indicator" id="api-gateway-status">●</span>
+                            </div>
+                            <p>Main entry point for all requests</p>
+                            <div class="service-info">
+                                <span>Port: 30000</span>
+                                <button onclick="testService('api-gateway', 'http://localhost:30000/health')">Test</button>
+                            </div>
+                        </div>
+
+                        <div class="service-card" id="auth-service-card">
+                            <div class="service-header">
+                                <h3>Auth Service</h3>
+                                <span class="status-indicator" id="auth-service-status">●</span>
+                            </div>
+                            <p>User authentication and authorization</p>
+                            <div class="service-info">
+                                <span>Port: 30001</span>
+                                <button onclick="testService('auth-service', 'http://localhost:30001/health')">Test</button>
+                            </div>
+                        </div>
+
+                        <div class="service-card" id="product-service-card">
+                            <div class="service-header">
+                                <h3>Product Service</h3>
+                                <span class="status-indicator" id="product-service-status">●</span>
+                            </div>
+                            <p>Product catalog management</p>
+                            <div class="service-info">
+                                <span>Port: 30002</span>
+                                <button onclick="testService('product-service', 'http://localhost:30002/health')">Test</button>
+                            </div>
+                        </div>
+
+                        <div class="service-card" id="order-service-card">
+                            <div class="service-header">
+                                <h3>Order Service</h3>
+                                <span class="status-indicator" id="order-service-status">●</span>
+                            </div>
+                            <p>Order processing and management</p>
+                            <div class="service-info">
+                                <span>Port: 30003</span>
+                                <button onclick="testService('order-service', 'http://localhost:30003/health')">Test</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="productsSection" class="section">
+                    <h2><i class="fas fa-box"></i> Product Catalog</h2>
+                    <button onclick="loadProducts()" class="btn primary">Load Products</button>
+                    <div id="products-list" class="products-grid"></div>
+                </div>
+
+                <div id="ordersSection" class="section">
+                    <h2><i class="fas fa-shopping-cart"></i> Orders</h2>
+                    <button onclick="loadOrders()" class="btn primary">Load Orders</button>
+                    <div id="orders-list" class="orders-grid"></div>
+                </div>
+
+                <div id="monitoringSection" class="section">
+                    <h2><i class="fas fa-chart-line"></i> Monitoring & Observability</h2>
+                    <div class="monitoring-grid">
+                        <div class="monitoring-card">
+                            <h3><i class="fas fa-tachometer-alt"></i> Grafana</h3>
+                            <p>Metrics visualization and dashboards</p>
+                            <a href="http://localhost:30300" target="_blank" class="btn secondary">Open Grafana</a>
+                            <small>admin / prom-operator</small>
+                        </div>
+                        <div class="monitoring-card">
+                            <h3><i class="fas fa-fire"></i> Prometheus</h3>
+                            <p>Metrics collection and storage</p>
+                            <a href="http://localhost:30090" target="_blank" class="btn secondary">Open Prometheus</a>
+                        </div>
+                        <div class="monitoring-card">
+                            <h3><i class="fas fa-search"></i> Jaeger</h3>
+                            <p>Distributed tracing and monitoring</p>
+                            <a href="http://localhost:30686" target="_blank" class="btn secondary">Open Jaeger</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <footer class="footer">
+            <div class="container">
+                <p>&copy; 2025 Microservices Platform - Learning Environment</p>
+                <div class="system-status">
+                    <span id="system-status">System Status: <span id="overall-status">Checking...</span></span>
+                </div>
+            </div>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
