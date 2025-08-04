@@ -23,21 +23,60 @@ spec:
       containers:
       - name: order-service
         image: node:18-alpine
-        command: ["sh", "-c"]
+        command: ["node", "-e"]
         args:
           - |
-            npm install express prom-client jaeger-client opentracing
-            cat > app.js << 'EOF'
-            const express = require('express');
-            const client = require('prom-client');
-            const jaeger = require('jaeger-client');
-
-            const app = express();
-            const register = new client.Registry();
+            const http = require('http');
+            const url = require('url');
             
-            // Mock orders data
-            let orders = [
-              { id: 1, productId: 1, userId: 'user1', quantity: 2, status: 'completed' },
+            const orders = [
+              { id: 1, userId: 1, products: [1, 2], total: 1019.98, status: 'completed' },
+              { id: 2, userId: 2, products: [3], total: 9.99, status: 'pending' }
+            ];
+            
+            const server = http.createServer((req, res) => {
+              const parsedUrl = url.parse(req.url, true);
+              
+              res.setHeader('Access-Control-Allow-Origin', '*');
+              res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+              res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+              res.setHeader('Content-Type', 'application/json');
+              
+              if (req.method === 'OPTIONS') {
+                res.writeHead(200);
+                res.end();
+                return;
+              }
+              
+              if (parsedUrl.pathname === '/health') {
+                res.writeHead(200);
+                res.end(JSON.stringify({
+                  service: 'order-service',
+                  status: 'healthy',
+                  timestamp: new Date().toISOString()
+                }));
+              } else if (parsedUrl.pathname === '/orders') {
+                res.writeHead(200);
+                res.end(JSON.stringify(orders));
+              } else if (parsedUrl.pathname.startsWith('/orders/')) {
+                const id = parseInt(parsedUrl.pathname.split('/')[2]);
+                const order = orders.find(o => o.id === id);
+                if (order) {
+                  res.writeHead(200);
+                  res.end(JSON.stringify(order));
+                } else {
+                  res.writeHead(404);
+                  res.end(JSON.stringify({ error: 'Order not found' }));
+                }
+              } else {
+                res.writeHead(404);
+                res.end(JSON.stringify({ error: 'Not found' }));
+              }
+            });
+            
+            server.listen(3003, () => {
+              console.log('Order Service listening on port 3003');
+            });
               { id: 2, productId: 2, userId: 'user2', quantity: 1, status: 'pending' }
             ];
 

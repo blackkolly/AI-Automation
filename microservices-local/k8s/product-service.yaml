@@ -23,21 +23,61 @@ spec:
       containers:
       - name: product-service
         image: node:18-alpine
-        command: ["sh", "-c"]
+        command: ["node", "-e"]
         args:
           - |
-            npm install express prom-client jaeger-client opentracing
-            cat > app.js << 'EOF'
-            const express = require('express');
-            const client = require('prom-client');
-            const jaeger = require('jaeger-client');
-
-            const app = express();
-            const register = new client.Registry();
+            const http = require('http');
+            const url = require('url');
             
-            // Mock products data
             const products = [
               { id: 1, name: 'Laptop', price: 999.99, category: 'Electronics' },
+              { id: 2, name: 'Coffee Mug', price: 19.99, category: 'Home' },
+              { id: 3, name: 'Book', price: 9.99, category: 'Education' }
+            ];
+            
+            const server = http.createServer((req, res) => {
+              const parsedUrl = url.parse(req.url, true);
+              
+              res.setHeader('Access-Control-Allow-Origin', '*');
+              res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+              res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+              res.setHeader('Content-Type', 'application/json');
+              
+              if (req.method === 'OPTIONS') {
+                res.writeHead(200);
+                res.end();
+                return;
+              }
+              
+              if (parsedUrl.pathname === '/health') {
+                res.writeHead(200);
+                res.end(JSON.stringify({
+                  service: 'product-service',
+                  status: 'healthy',
+                  timestamp: new Date().toISOString()
+                }));
+              } else if (parsedUrl.pathname === '/products') {
+                res.writeHead(200);
+                res.end(JSON.stringify(products));
+              } else if (parsedUrl.pathname.startsWith('/products/')) {
+                const id = parseInt(parsedUrl.pathname.split('/')[2]);
+                const product = products.find(p => p.id === id);
+                if (product) {
+                  res.writeHead(200);
+                  res.end(JSON.stringify(product));
+                } else {
+                  res.writeHead(404);
+                  res.end(JSON.stringify({ error: 'Product not found' }));
+                }
+              } else {
+                res.writeHead(404);
+                res.end(JSON.stringify({ error: 'Not found' }));
+              }
+            });
+            
+            server.listen(3002, () => {
+              console.log('Product Service listening on port 3002');
+            });
               { id: 2, name: 'Smartphone', price: 599.99, category: 'Electronics' },
               { id: 3, name: 'Coffee Mug', price: 12.99, category: 'Home' }
             ];
