@@ -23,59 +23,53 @@ spec:
       containers:
       - name: auth-service
         image: node:18-alpine
-        command: ["sh", "-c"]
+        command: ["node", "-e"]
         args:
           - |
-            npm install express prom-client jaeger-client opentracing
-            cat > app.js << 'EOF'
-            const express = require('express');
-            const client = require('prom-client');
-            const jaeger = require('jaeger-client');
-
-            const app = express();
-            const register = new client.Registry();
+            const http = require('http');
+            const url = require('url');
             
-            // Metrics
-            const httpRequestsTotal = new client.Counter({
-              name: 'http_requests_total',
-              help: 'Total HTTP requests',
-              labelNames: ['method', 'route', 'status'],
-              registers: [register]
-            });
-
-            // Jaeger tracing
-            const config = {
-              serviceName: 'auth-service',
-              reporter: {
-                collectorEndpoint: 'http://jaeger-collector.observability.svc.cluster.local:14268/api/traces'
+            let requestCount = 0;
+            
+            const server = http.createServer((req, res) => {
+              const parsedUrl = url.parse(req.url, true);
+              requestCount++;
+              
+              res.setHeader('Access-Control-Allow-Origin', '*');
+              res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+              res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+              res.setHeader('Content-Type', 'application/json');
+              
+              if (req.method === 'OPTIONS') {
+                res.writeHead(200);
+                res.end();
+                return;
               }
-            };
-            const tracer = jaeger.initTracer(config);
-
-            // Middleware
-            app.use((req, res, next) => {
-              res.on('finish', () => {
-                httpRequestsTotal.inc({ method: req.method, route: req.path, status: res.statusCode });
-              });
-              next();
+              
+              if (parsedUrl.pathname === '/health') {
+                res.writeHead(200);
+                res.end(JSON.stringify({
+                  service: 'auth-service',
+                  status: 'healthy',
+                  timestamp: new Date().toISOString()
+                }));
+              } else if (parsedUrl.pathname === '/metrics') {
+                res.writeHead(200, { 'Content-Type': 'text/plain' });
+                res.end('# HELP http_requests_total Total HTTP requests\\n# TYPE http_requests_total counter\\nhttp_requests_total ' + requestCount + '\\n');
+              } else if (parsedUrl.pathname === '/auth/login' && req.method === 'POST') {
+                res.writeHead(200);
+                res.end(JSON.stringify({ token: 'mock-jwt-token', user: 'test-user' }));
+              } else if (parsedUrl.pathname === '/auth/validate' && req.method === 'POST') {
+                res.writeHead(200);
+                res.end(JSON.stringify({ valid: true, user: 'test-user' }));
+              } else {
+                res.writeHead(404);
+                res.end(JSON.stringify({ error: 'Not found' }));
+              }
             });
-
-            // Routes
-            app.get('/health', (req, res) => {
-              res.json({ service: 'auth-service', status: 'healthy', timestamp: new Date().toISOString() });
-            });
-
-            app.get('/metrics', (req, res) => {
-              res.set('Content-Type', register.contentType);
-              res.end(register.metrics());
-            });
-
-            app.post('/auth/login', (req, res) => {
-              res.json({ token: 'mock-jwt-token', user: 'test-user' });
-            });
-
-            app.post('/auth/validate', (req, res) => {
-              res.json({ valid: true, user: 'test-user' });
+            
+            server.listen(3001, () => {
+              console.log('Auth Service listening on port 3001');
             });
 
             // Start servers
