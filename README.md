@@ -1,2 +1,2 @@
 # AI-Automation
-The project
+The project consist the implementation and deploying microservices
