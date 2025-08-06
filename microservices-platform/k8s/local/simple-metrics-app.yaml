@@ -1,0 +1,163 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: metrics-app
+  namespace: microservices
+data:
+  server.js: |
+    const http = require('http');
+    
+    let requestCount = 0;
+    let productViews = 0;
+    let orderCount = 0;
+    
+    const server = http.createServer((req, res) => {
+      requestCount++;
+      
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+      
+      if (req.method === 'OPTIONS') {
+        res.writeHead(200);
+        res.end();
+        return;
+      }
+      
+      const url = req.url;
+      
+      if (url === '/metrics') {
+        const metrics = `# HELP http_requests_total Total number of HTTP requests
+# TYPE http_requests_total counter
+http_requests_total{service="sample-app"} ${requestCount}
+
+# HELP product_views_total Total product views
+# TYPE product_views_total counter
+product_views_total{service="sample-app"} ${productViews}
+
+# HELP orders_total Total orders created
+# TYPE orders_total counter
+orders_total{service="sample-app"} ${orderCount}
+
+# HELP service_up Service availability
+# TYPE service_up gauge
+service_up{service="sample-app"} 1
+
+# HELP memory_usage_bytes Memory usage in bytes
+# TYPE memory_usage_bytes gauge
+memory_usage_bytes{service="sample-app"} ${process.memoryUsage().heapUsed}
+`;
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end(metrics);
+      } else if (url === '/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'healthy', timestamp: new Date().toISOString() }));
+      } else if (url === '/products') {
+        productViews++;
+        const products = [
+          { id: 1, name: 'Laptop', price: 999.99, views: productViews },
+          { id: 2, name: 'Phone', price: 699.99 },
+          { id: 3, name: 'Tablet', price: 399.99 }
+        ];
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(products));
+      } else if (url === '/orders' && req.method === 'POST') {
+        orderCount++;
+        res.writeHead(201, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ id: orderCount, status: 'created' }));
+      } else if (url === '/orders') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ total_orders: orderCount }));
+      } else {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Not found' }));
+      }
+    });
+    
+    const port = 3000;
+    server.listen(port, '0.0.0.0', () => {
+      console.log(`Metrics server running on port ${port}`);
+      console.log('Available endpoints:');
+      console.log('  /metrics - Prometheus metrics');
+      console.log('  /health - Health check');
+      console.log('  /products - Product API');
+      console.log('  /orders - Orders API');
+    });
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metrics-app
+  namespace: microservices
+  labels:
+    app: metrics-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: metrics-app
+  template:
+    metadata:
+      labels:
+        app: metrics-app
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3000"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: metrics-app
+        image: node:18-alpine
+        ports:
+        - containerPort: 3000
+          name: http
+        command: ["node", "/app/server.js"]
+        volumeMounts:
+        - name: app-code
+          mountPath: /app
+        env:
+        - name: NODE_ENV
+          value: "production"
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: app-code
+        configMap:
+          name: metrics-app
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: metrics-app
+  namespace: microservices
+  labels:
+    app: metrics-app
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "3000"
+    prometheus.io/path: "/metrics"
+spec:
+  selector:
+    app: metrics-app
+  ports:
+  - name: http
+    port: 3000
+    targetPort: 3000
+  type: ClusterIP

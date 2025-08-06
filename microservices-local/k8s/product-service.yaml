@@ -1,0 +1,171 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: product-service
+  namespace: microservices
+  labels:
+    app: product-service
+    monitoring: prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: product-service
+  template:
+    metadata:
+      labels:
+        app: product-service
+        monitoring: prometheus
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: product-service
+          image: node:18-alpine
+          command: ["node", "-e"]
+          args:
+            - |
+              const http = require('http');
+              const url = require('url');
+
+              const products = [
+                { id: 1, name: 'iPhone 14', price: 999.99, category: 'Electronics', description: 'Latest iPhone model' },
+                { id: 2, name: 'MacBook Pro', price: 1999.99, category: 'Computers', description: 'Professional laptop' },
+                { id: 3, name: 'AirPods Pro', price: 249.99, category: 'Audio', description: 'Wireless earbuds' },
+                { id: 4, name: 'iPad Air', price: 599.99, category: 'Tablets', description: 'Lightweight tablet' },
+                { id: 5, name: 'Apple Watch', price: 399.99, category: 'Wearables', description: 'Smart watch' }
+              ];
+
+              const server = http.createServer((req, res) => {
+                const parsedUrl = url.parse(req.url, true);
+                
+                res.setHeader('Access-Control-Allow-Origin', '*');
+                res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+                res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+                res.setHeader('Content-Type', 'application/json');
+                
+                if (req.method === 'OPTIONS') {
+                  res.writeHead(200);
+                  res.end();
+                  return;
+                }
+                
+                console.log(new Date().toISOString() + ' - ' + req.method + ' ' + req.url);
+                
+                if (parsedUrl.pathname === '/health') {
+                  res.writeHead(200);
+                  res.end(JSON.stringify({ 
+                    status: 'healthy', 
+                    service: 'product-service',
+                    timestamp: new Date().toISOString(),
+                    uptime: process.uptime()
+                  }));
+                  return;
+                }
+                
+                if (parsedUrl.pathname === '/metrics') {
+                  res.writeHead(200, { 'Content-Type': 'text/plain' });
+                  res.end('# HELP product_service_requests_total Total number of requests\n# TYPE product_service_requests_total counter\nproduct_service_requests_total 100\n\n# HELP product_service_uptime_seconds Service uptime in seconds\n# TYPE product_service_uptime_seconds gauge\nproduct_service_uptime_seconds ' + process.uptime() + '\n\n# HELP product_count Total number of products\n# TYPE product_count gauge\nproduct_count ' + products.length + '\n');
+                  return;
+                }
+                
+                if (parsedUrl.pathname === '/products' || parsedUrl.pathname === '/') {
+                  if (req.method === 'GET') {
+                    const category = parsedUrl.query.category;
+                    let filteredProducts = products;
+                    
+                    if (category) {
+                      filteredProducts = products.filter(p => 
+                        p.category.toLowerCase() === category.toLowerCase()
+                      );
+                    }
+                    
+                    res.writeHead(200);
+                    res.end(JSON.stringify({
+                      products: filteredProducts,
+                      total: filteredProducts.length,
+                      service: 'product-service'
+                    }));
+                    return;
+                  }
+                }
+                
+                if (parsedUrl.pathname.startsWith('/products/')) {
+                  const productId = parseInt(parsedUrl.pathname.split('/')[2]);
+                  const product = products.find(p => p.id === productId);
+                  
+                  if (product) {
+                    res.writeHead(200);
+                    res.end(JSON.stringify(product));
+                  } else {
+                    res.writeHead(404);
+                    res.end(JSON.stringify({ error: 'Product not found' }));
+                  }
+                  return;
+                }
+                
+                res.writeHead(404);
+                res.end(JSON.stringify({ error: 'Not found', path: parsedUrl.pathname }));
+              });
+
+              const port = process.env.PORT || 3000;
+              server.listen(port, '0.0.0.0', () => {
+                console.log('Product Service listening on port ' + port);
+              });
+          ports:
+            - containerPort: 3000
+              name: http
+            - containerPort: 9090
+              name: metrics
+          env:
+            - name: PORT
+              value: "3000"
+            - name: SERVICE_NAME
+              value: "product-service"
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "128Mi"
+              cpu: "100m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: product-service
+  namespace: microservices
+  labels:
+    app: product-service
+    monitoring: prometheus
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+    prometheus.io/path: "/metrics"
+spec:
+  selector:
+    app: product-service
+  ports:
+    - name: http
+      port: 80
+      targetPort: 3000
+      protocol: TCP
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+      protocol: TCP
+  type: ClusterIP

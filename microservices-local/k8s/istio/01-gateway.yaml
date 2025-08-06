@@ -1,0 +1,51 @@
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: microservices-gateway
+  namespace: microservices
+  labels:
+    app: microservices-platform
+spec:
+  selector:
+    istio: ingressgateway # use istio default controller
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - microservices.local
+    - api-gateway.local
+    - frontend.local
+  - port:
+      number: 443
+      name: https
+      protocol: HTTPS
+    tls:
+      mode: SIMPLE
+      credentialName: microservices-tls-secret
+    hosts:
+    - microservices.local
+    - api-gateway.local
+    - frontend.local
+---
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: observability-gateway
+  namespace: istio-system
+  labels:
+    app: observability
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - kiali.local
+    - jaeger.local
+    - grafana.local
+    - prometheus.local

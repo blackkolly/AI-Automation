@@ -1,0 +1,160 @@
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: api-gateway-vs
+  namespace: microservices
+  labels:
+    app: api-gateway
+spec:
+  hosts:
+  - api-gateway.local
+  - microservices.local
+  gateways:
+  - microservices-gateway
+  http:
+  - match:
+    - uri:
+        prefix: /api/
+    route:
+    - destination:
+        host: api-gateway.microservices.svc.cluster.local
+        port:
+          number: 3000
+    timeout: 30s
+    retries:
+      attempts: 3
+      perTryTimeout: 10s
+  - match:
+    - uri:
+        prefix: /product
+    route:
+    - destination:
+        host: product-service.microservices.svc.cluster.local
+        port:
+          number: 80
+    timeout: 20s
+    retries:
+      attempts: 3
+      perTryTimeout: 7s
+  - match:
+    - uri:
+        prefix: /order
+    route:
+    - destination:
+        host: order-service.microservices.svc.cluster.local
+        port:
+          number: 3003
+    timeout: 25s
+    retries:
+      attempts: 3
+      perTryTimeout: 8s
+  - match:
+    - uri:
+        prefix: /health
+    route:
+    - destination:
+        host: api-gateway.microservices.svc.cluster.local
+        port:
+          number: 3000
+  - match:
+    - uri:
+        prefix: /metrics
+    route:
+    - destination:
+        host: api-gateway.microservices.svc.cluster.local
+        port:
+          number: 3000
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: frontend-vs
+  namespace: microservices
+  labels:
+    app: frontend
+spec:
+  hosts:
+  - frontend.local
+  gateways:
+  - microservices-gateway
+  http:
+  - match:
+    - uri:
+        prefix: /
+    route:
+    - destination:
+        host: frontend.microservices.svc.cluster.local
+        port:
+          number: 80
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: auth-service-vs
+  namespace: microservices
+  labels:
+    app: auth-service
+spec:
+  hosts:
+  - auth-service.microservices.svc.cluster.local
+  http:
+  - match:
+    - uri:
+        prefix: /auth/
+    route:
+    - destination:
+        host: auth-service.microservices.svc.cluster.local
+        port:
+          number: 3001
+    timeout: 15s
+    retries:
+      attempts: 2
+      perTryTimeout: 5s
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: product-service-vs
+  namespace: microservices
+  labels:
+    app: product-service
+spec:
+  hosts:
+  - product-service.microservices.svc.cluster.local
+  http:
+  - match:
+    - uri:
+        prefix: /products
+    route:
+    - destination:
+        host: product-service.microservices.svc.cluster.local
+        port:
+          number: 3002
+    timeout: 20s
+    retries:
+      attempts: 3
+      perTryTimeout: 7s
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: order-service-vs
+  namespace: microservices
+  labels:
+    app: order-service
+spec:
+  hosts:
+  - order-service.microservices.svc.cluster.local
+  http:
+  - match:
+    - uri:
+        prefix: /orders
+    route:
+    - destination:
+        host: order-service.microservices.svc.cluster.local
+        port:
+          number: 3003
+    timeout: 25s
+    retries:
+      attempts: 3
+      perTryTimeout: 8s

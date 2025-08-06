@@ -1,0 +1,134 @@
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: api-gateway-dr
+  namespace: microservices
+  labels:
+    app: api-gateway
+spec:
+  host: api-gateway.microservices.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 100
+      http:
+        http1MaxPendingRequests: 10
+        maxRequestsPerConnection: 2
+    loadBalancer:
+      simple: LEAST_CONN
+    outlierDetection:
+      consecutiveErrors: 3
+      interval: 30s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+  subsets:
+  - name: v1
+    labels:
+      version: v1
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: auth-service-dr
+  namespace: microservices
+  labels:
+    app: auth-service
+spec:
+  host: auth-service.microservices.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 50
+      http:
+        http1MaxPendingRequests: 5
+        maxRequestsPerConnection: 2
+    loadBalancer:
+      simple: ROUND_ROBIN
+    outlierDetection:
+      consecutiveErrors: 2
+      interval: 20s
+      baseEjectionTime: 20s
+      maxEjectionPercent: 30
+  subsets:
+  - name: v1
+    labels:
+      version: v1
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: product-service-dr
+  namespace: microservices
+  labels:
+    app: product-service
+spec:
+  host: product-service.microservices.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 80
+      http:
+        http1MaxPendingRequests: 8
+        maxRequestsPerConnection: 3
+    loadBalancer:
+      simple: RANDOM
+    outlierDetection:
+      consecutiveErrors: 3
+      interval: 25s
+      baseEjectionTime: 25s
+      maxEjectionPercent: 40
+  subsets:
+  - name: v1
+    labels:
+      version: v1
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: order-service-dr
+  namespace: microservices
+  labels:
+    app: order-service
+spec:
+  host: order-service.microservices.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 60
+      http:
+        http1MaxPendingRequests: 6
+        maxRequestsPerConnection: 2
+    loadBalancer:
+      simple: LEAST_CONN
+    outlierDetection:
+      consecutiveErrors: 3
+      interval: 30s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+  subsets:
+  - name: v1
+    labels:
+      version: v1
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: frontend-dr
+  namespace: microservices
+  labels:
+    app: frontend
+spec:
+  host: frontend.microservices.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 100
+      http:
+        http1MaxPendingRequests: 10
+        maxRequestsPerConnection: 5
+    loadBalancer:
+      simple: ROUND_ROBIN
+  subsets:
+  - name: v1
+    labels:
+      version: v1

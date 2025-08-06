@@ -1,0 +1,155 @@
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: api-gateway-canary
+  namespace: microservices
+  labels:
+    app: api-gateway
+    version: canary
+spec:
+  hosts:
+  - api.microservices.local
+  gateways:
+  - microservices-gateway
+  http:
+  - match:
+    - headers:
+        canary-user:
+          exact: "true"
+    route:
+    - destination:
+        host: api-gateway
+        subset: v2
+      weight: 100
+  - route:
+    - destination:
+        host: api-gateway
+        subset: v1
+      weight: 90
+    - destination:
+        host: api-gateway
+        subset: v2
+      weight: 10
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: api-gateway-canary
+  namespace: microservices
+  labels:
+    app: api-gateway
+spec:
+  host: api-gateway
+  subsets:
+  - name: v1
+    labels:
+      version: v1
+    trafficPolicy:
+      loadBalancer:
+        simple: LEAST_CONN
+      connectionPool:
+        tcp:
+          maxConnections: 50
+        http:
+          http1MaxPendingRequests: 20
+          maxRequestsPerConnection: 10
+  - name: v2
+    labels:
+      version: v2
+    trafficPolicy:
+      loadBalancer:
+        simple: ROUND_ROBIN
+      connectionPool:
+        tcp:
+          maxConnections: 30
+        http:
+          http1MaxPendingRequests: 10
+          maxRequestsPerConnection: 5
+---
+# Fault injection for testing
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: order-service-fault-injection
+  namespace: microservices
+  labels:
+    app: order-service
+spec:
+  hosts:
+  - order-service
+  http:
+  - match:
+    - headers:
+        test-fault:
+          exact: "delay"
+    fault:
+      delay:
+        fixedDelay: 2s
+        percentage:
+          value: 50
+    route:
+    - destination:
+        host: order-service
+  - match:
+    - headers:
+        test-fault:
+          exact: "abort"
+    fault:
+      abort:
+        httpStatus: 503
+        percentage:
+          value: 30
+    route:
+    - destination:
+        host: order-service
+  - route:
+    - destination:
+        host: order-service
+---
+# Rate limiting configuration
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: rate-limit-policy
+  namespace: microservices
+  labels:
+    app: api-gateway
+spec:
+  selector:
+    matchLabels:
+      app: api-gateway
+  rules:
+  - from:
+    - source:
+        principals: ["cluster.local/ns/microservices/sa/api-gateway"]
+    to:
+    - operation:
+        methods: ["GET", "POST"]
+    when:
+    - key: source.ip
+      notValues: ["10.244.0.0/16"]  # Block external cluster IPs
+---
+# Circuit breaker for product service
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: product-service-circuit-breaker
+  namespace: microservices
+  labels:
+    app: product-service
+spec:
+  host: product-service
+  trafficPolicy:
+    outlierDetection:
+      consecutiveGatewayErrors: 3
+      consecutive5xxErrors: 3
+      interval: 30s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+      minHealthPercent: 30
+    connectionPool:
+      tcp:
+        maxConnections: 20
+      http:
+        http1MaxPendingRequests: 10
+        maxRequestsPerConnection: 2
