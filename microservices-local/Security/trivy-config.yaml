@@ -1,0 +1,124 @@
+# Trivy Configuration File
+# This file configures Trivy scanning behavior
+
+# Database settings
+db:
+  # Skip database update
+  skip-update: false
+  # Database repository
+  repository: ghcr.io/aquasecurity/trivy-db:2
+
+# Cache settings
+cache:
+  # Cache directory
+  dir: ~/.cache/trivy
+
+# Scan settings
+scan:
+  # Security checks to perform
+  security-checks:
+    - vuln
+    - config
+    - secret
+    - license
+  
+  # Skip certain checks
+  skip-checks: []
+  
+  # Offline scanning (useful for air-gapped environments)
+  offline-scan: false
+
+# Vulnerability settings
+vulnerability:
+  # Vulnerability types to include
+  type:
+    - os
+    - library
+  
+  # Severities to report
+  severity:
+    - UNKNOWN
+    - LOW
+    - MEDIUM  
+    - HIGH
+    - CRITICAL
+
+# Report settings
+report:
+  # Output format (table, json, sarif, etc.)
+  format: table
+  
+  # Include suppressed vulnerabilities
+  include-suppressed: false
+
+# Kubernetes specific settings
+kubernetes:
+  # Namespace to scan (empty = all namespaces)
+  namespace: ""
+  
+  # Kubeconfig file path
+  kubeconfig: ~/.kube/config
+  
+  # Include system workloads
+  include-system-workloads: false
+
+# Container image settings
+image:
+  # Removed packages
+  removed-pkgs: false
+  
+  # Platform to scan for multi-arch images
+  platform: "linux/amd64"
+
+# Configuration audit settings
+config:
+  # Configuration file paths to scan
+  file-patterns:
+    - "*.yaml"
+    - "*.yml"
+    - "*.json"
+    - "*.tf"
+    - "*.dockerfile"
+    - "Dockerfile*"
+  
+  # Policy paths
+  policy-paths: []
+  
+  # Data paths for custom policies
+  data-paths: []
+
+# Secret scanning settings
+secret:
+  # Secret scanning configuration
+  config-path: ""
+
+# License scanning settings
+license:
+  # License types to flag
+  forbidden:
+    - GPL-2.0
+    - GPL-3.0
+  
+  # Allowed licenses
+  permitted:
+    - MIT
+    - Apache-2.0
+    - BSD-3-Clause
+
+# Ignore settings
+ignore:
+  # Files to ignore during scanning
+  files:
+    - "**/.git/**"
+    - "**/node_modules/**"
+    - "**/vendor/**"
+    - "**/*.test.js"
+    - "**/*.spec.js"
+  
+  # CVE IDs to ignore
+  cves: []
+
+# Timeout settings
+timeout:
+  # Overall scan timeout
+  timeout: 5m

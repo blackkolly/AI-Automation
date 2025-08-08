@@ -1,0 +1,31 @@
+      PID    PPID    PGID     WINPID   TTY         UID    STIME COMMAND
+     5015    5014    5015      22868  pty1      197609   Aug  4 /usr/bin/bash
+     5014       1    5014      22468  ?         197609   Aug  4 /usr/bin/mintty
+    13311   10387   13311      20904  cons2     197609   Aug  6 /usr/bin/bash
+     5081    5080    5081      17356  pty4      197609   Aug  4 /usr/bin/bash
+    32366   10387   32365      34512  cons2     197609 20:41:13 /usr/bin/bash
+     5080       1    5080       9164  ?         197609   Aug  4 /usr/bin/mintty
+     5114       1    5114      14812  ?         197609   Aug  4 /usr/bin/mintty
+    10387       1   10387       6484  cons2     197609   Aug  6 /usr/bin/bash
+     5037    5036    5037       4400  pty2      197609   Aug  4 /usr/bin/bash
+     4992    4991    4992      15012  pty0      197609   Aug  4 /usr/bin/bash
+    12261       1   12261      37136  ?         197609   Aug  6 /usr/bin/mintty
+    10320       1   10320      31632  cons1     197609   Aug  6 /usr/bin/bash
+     5140       1    5140      21580  ?         197609   Aug  4 /usr/bin/mintty
+     5059    5058    5059      16708  pty3      197609   Aug  4 /usr/bin/bash
+    12518       1   12518      17472  cons6     197609   Aug  6 /usr/bin/bash
+    11849       1   11849      19688  cons4     197609   Aug  6 /usr/bin/bash
+     5167    5166    5167       4408  pty7      197609   Aug  4 /usr/bin/bash
+     2805       1    2805      31104  cons7     197609 01:57:44 /usr/bin/bash
+    13239   10387   13239      21852  cons2     197609   Aug  6 /usr/bin/bash
+    12262   12261   12262      27584  pty8      197609   Aug  6 /usr/bin/bash
+     5058       1    5058      21872  ?         197609   Aug  4 /usr/bin/mintty
+     5166       1    5166      20892  ?         197609   Aug  4 /usr/bin/mintty
+     5141    5140    5141      11212  pty6      197609   Aug  4 /usr/bin/bash
+     5036       1    5036      22264  ?         197609   Aug  4 /usr/bin/mintty
+     4991       1    4991      13828  ?         197609   Aug  4 /usr/bin/mintty
+    11238       1   11238      37904  cons3     197609   Aug  6 /usr/bin/bash
+    12014       1   12014      10884  cons5     197609   Aug  6 /usr/bin/bash
+    10275       1   10275      26304  cons0     197609   Aug  6 /usr/bin/bash
+    32365   10387   32365      32832  cons2     197609 20:41:13 /usr/bin/ps
+     5115    5114    5115      23212  pty5      197609   Aug  4 /usr/bin/bash
