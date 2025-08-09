@@ -1,0 +1,101 @@
+# =================================================================
+# SIMPLIFIED DOCKER COMPOSE FOR CORE TESTING SERVICES
+# =================================================================
+#
+# This compose file sets up essential services for testing:
+# - MongoDB for database tests
+# - Redis for caching tests  
+# - Basic mock services
+#
+# Usage:
+#   docker-compose -f docker-compose.simple.yml up -d
+#   docker-compose -f docker-compose.simple.yml down -v
+#
+# =================================================================
+
+services:
+  # Test Database - MongoDB
+  mongo-test:
+    image: mongo:7.0
+    container_name: mongo-test
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: testuser
+      MONGO_INITDB_ROOT_PASSWORD: testpass
+      MONGO_INITDB_DATABASE: test_microservices
+    volumes:
+      - mongo-test-data:/data/db
+      - ./config/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    networks:
+      - test-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Test Cache - Redis
+  redis-test:
+    image: redis:7.2-alpine
+    container_name: redis-test
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --requirepass testpass
+    volumes:
+      - redis-test-data:/data
+    networks:
+      - test-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # Simple Mock API Service
+  mock-api:
+    image: nginx:alpine
+    container_name: mock-api
+    restart: unless-stopped
+    ports:
+      - "3002:80"
+    volumes:
+      - ./config/mock-responses:/usr/share/nginx/html:ro
+    networks:
+      - test-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+# Networks
+networks:
+  test-network:
+    driver: bridge
+    name: test-network
+
+# Volumes
+volumes:
+  mongo-test-data:
+    name: mongo-test-data
+  redis-test-data:
+    name: redis-test-data
+
+# =================================================================
+# USAGE EXAMPLES
+# =================================================================
+#
+# Start core test services:
+#   docker-compose -f docker-compose.simple.yml up -d
+#
+# View logs:
+#   docker-compose -f docker-compose.simple.yml logs -f
+#
+# Stop and remove everything:
+#   docker-compose -f docker-compose.simple.yml down -v
+#
+# =================================================================

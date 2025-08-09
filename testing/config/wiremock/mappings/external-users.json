@@ -1,0 +1,31 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPath": "/api/external/users"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "users": [
+        {
+          "id": "ext-user-1",
+          "name": "External User 1",
+          "email": "ext1@example.com",
+          "status": "active"
+        },
+        {
+          "id": "ext-user-2", 
+          "name": "External User 2",
+          "email": "ext2@example.com",
+          "status": "active"
+        }
+      ],
+      "total": 2,
+      "page": 1,
+      "pageSize": 10
+    }
+  }
+}

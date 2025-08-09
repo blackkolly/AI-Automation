@@ -1,0 +1,20 @@
+{
+  "request": {
+    "method": "POST",
+    "urlPath": "/api/payments/process"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "transactionId": "{{randomValue type='UUID'}}",
+      "status": "success",
+      "amount": "{{request.body 'amount'}}",
+      "currency": "USD",
+      "timestamp": "{{now format='yyyy-MM-dd HH:mm:ss'}}",
+      "paymentMethod": "credit_card"
+    }
+  }
+}

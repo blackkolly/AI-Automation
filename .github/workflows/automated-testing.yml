@@ -1,0 +1,494 @@
+# =================================================================
+# AUTOMATED TESTING WORKFLOW
+# =================================================================
+#
+# This workflow runs comprehensive automated testing on:
+# - Pull requests to main/develop branches
+# - Pushes to main/develop branches  
+# - Manual trigger (workflow_dispatch)
+#
+# Test Coverage:
+# - Unit Tests (Jest)
+# - Integration Tests (API & Database)
+# - End-to-End Tests (Playwright)
+# - Performance Tests (K6)
+# - Security Tests (OWASP ZAP)
+#
+# =================================================================
+
+name: 🧪 Comprehensive Testing Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - '.gitignore'
+  pull_request:
+    branches: [main, develop]
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - '.gitignore'
+  workflow_dispatch:
+    inputs:
+      test_type:
+        description: 'Type of tests to run'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - unit
+          - integration
+          - e2e
+          - performance
+          - security
+
+env:
+  NODE_VERSION: '18'
+  CACHE_VERSION: v1
+  TEST_RESULTS_PATH: testing/reports
+
+jobs:
+  # =================================================================
+  # SETUP AND VALIDATION
+  # =================================================================
+  setup:
+    name: 🔧 Setup and Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      cache-key: ${{ steps.cache-key.outputs.key }}
+      should-run-tests: ${{ steps.changes.outputs.should-run }}
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🔍 Detect changes
+        id: changes
+        uses: dorny/paths-filter@v2
+        with:
+          filters: |
+            backend:
+              - 'src/**'
+              - 'Nodejs_App/**'
+              - 'kafka-microservices/**'
+            frontend:
+              - 'frontend/**'
+              - 'Kubernetes_multinode/frontend/**'
+            tests:
+              - 'testing/**'
+            k8s:
+              - 'k8s/**'
+              - '**/*.yaml'
+              - '**/*.yml'
+
+      - name: 🔑 Generate cache key
+        id: cache-key
+        run: |
+          echo "key=deps-${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ hashFiles('**/package*.json', '**/yarn.lock') }}" >> $GITHUB_OUTPUT
+
+      - name: 📊 Print detected changes
+        run: |
+          echo "Backend changed: ${{ steps.changes.outputs.backend }}"
+          echo "Frontend changed: ${{ steps.changes.outputs.frontend }}"
+          echo "Tests changed: ${{ steps.changes.outputs.tests }}"
+          echo "K8s changed: ${{ steps.changes.outputs.k8s }}"
+
+  # =================================================================
+  # UNIT TESTS
+  # =================================================================
+  unit-tests:
+    name: 🧪 Unit Tests
+    runs-on: ubuntu-latest
+    needs: setup
+    if: needs.setup.outputs.should-run-tests == 'true' || github.event.inputs.test_type == 'all' || github.event.inputs.test_type == 'unit'
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        node-version: ['16', '18', '20']
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+          cache-dependency-path: 'testing/package-lock.json'
+
+      - name: 📦 Install dependencies
+        working-directory: testing
+        run: |
+          npm ci --prefer-offline --no-audit
+          npm ls
+
+      - name: 🧪 Run unit tests
+        working-directory: testing
+        run: |
+          npm run test:unit:coverage
+        env:
+          NODE_ENV: test
+          CI: true
+
+      - name: 📊 Upload unit test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unit-test-results-node-${{ matrix.node-version }}
+          path: |
+            testing/reports/unit/
+            testing/coverage/
+          retention-days: 7
+
+      - name: 📈 Publish test results
+        uses: dorny/test-reporter@v1
+        if: success() || failure()
+        with:
+          name: Unit Tests (Node ${{ matrix.node-version }})
+          path: testing/reports/unit/junit.xml
+          reporter: jest-junit
+
+  # =================================================================
+  # INTEGRATION TESTS
+  # =================================================================
+  integration-tests:
+    name: 🔗 Integration Tests
+    runs-on: ubuntu-latest
+    needs: setup
+    if: needs.setup.outputs.should-run-tests == 'true' || github.event.inputs.test_type == 'all' || github.event.inputs.test_type == 'integration'
+    timeout-minutes: 25
+    services:
+      mongodb:
+        image: mongo:7.0
+        env:
+          MONGO_INITDB_ROOT_USERNAME: testuser
+          MONGO_INITDB_ROOT_PASSWORD: testpass
+        options: >-
+          --health-cmd "mongosh --eval \"db.adminCommand('ping')\""
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 27017:27017
+
+      redis:
+        image: redis:7.2-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: 'testing/package-lock.json'
+
+      - name: 📦 Install dependencies
+        working-directory: testing
+        run: npm ci --prefer-offline --no-audit
+
+      - name: ⏳ Wait for services
+        run: |
+          timeout 60 bash -c 'until curl -f http://localhost:27017; do sleep 2; done' || true
+          timeout 60 bash -c 'until redis-cli -h localhost ping; do sleep 2; done' || true
+
+      - name: 🔗 Run integration tests
+        working-directory: testing
+        run: npm run test:integration
+        env:
+          NODE_ENV: test
+          MONGODB_URI: mongodb://testuser:testpass@localhost:27017/test_microservices?authSource=admin
+          REDIS_URI: redis://localhost:6379/1
+          CI: true
+
+      - name: 📊 Upload integration test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: integration-test-results
+          path: testing/reports/integration/
+          retention-days: 7
+
+  # =================================================================
+  # END-TO-END TESTS
+  # =================================================================
+  e2e-tests:
+    name: 🌐 End-to-End Tests
+    runs-on: ubuntu-latest
+    needs: setup
+    if: needs.setup.outputs.should-run-tests == 'true' || github.event.inputs.test_type == 'all' || github.event.inputs.test_type == 'e2e'
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        browser: ['chromium', 'firefox', 'webkit']
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: 'testing/package-lock.json'
+
+      - name: 📦 Install dependencies
+        working-directory: testing
+        run: npm ci --prefer-offline --no-audit
+
+      - name: 🎭 Install Playwright browsers
+        working-directory: testing
+        run: npx playwright install ${{ matrix.browser }} --with-deps
+
+      - name: 🐳 Start test environment
+        run: |
+          cd testing
+          docker-compose -f docker-compose.test.yml up -d
+          
+          # Wait for services to be ready
+          timeout 300 bash -c 'until curl -f http://localhost:3000/health; do sleep 5; done'
+          timeout 300 bash -c 'until curl -f http://localhost:3001/health; do sleep 5; done'
+
+      - name: 🌐 Run E2E tests
+        working-directory: testing
+        run: npm run test:e2e -- --project=${{ matrix.browser }}
+        env:
+          CI: true
+          BASE_URL: http://localhost:3000
+          API_URL: http://localhost:3001
+
+      - name: 📊 Upload E2E test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-test-results-${{ matrix.browser }}
+          path: |
+            testing/reports/e2e/
+            testing/test-results/
+          retention-days: 7
+
+      - name: 🐳 Cleanup test environment
+        if: always()
+        run: |
+          cd testing
+          docker-compose -f docker-compose.test.yml down -v
+
+  # =================================================================
+  # PERFORMANCE TESTS
+  # =================================================================
+  performance-tests:
+    name: ⚡ Performance Tests
+    runs-on: ubuntu-latest
+    needs: setup
+    if: github.event.inputs.test_type == 'all' || github.event.inputs.test_type == 'performance'
+    timeout-minutes: 20
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐳 Start test environment
+        run: |
+          cd testing
+          docker-compose -f docker-compose.test.yml up -d
+          
+          # Wait for services
+          timeout 300 bash -c 'until curl -f http://localhost:3001/health; do sleep 5; done'
+
+      - name: ⚡ Run performance tests
+        run: |
+          cd testing
+          docker run --rm \
+            --network test-network \
+            -v $(pwd)/performance:/scripts \
+            -v $(pwd)/reports:/reports \
+            grafana/k6:latest run /scripts/load-tests/api-load-test.js
+
+      - name: 📊 Upload performance test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: performance-test-results
+          path: testing/reports/performance/
+          retention-days: 7
+
+      - name: 🐳 Cleanup
+        if: always()
+        run: |
+          cd testing
+          docker-compose -f docker-compose.test.yml down -v
+
+  # =================================================================
+  # SECURITY TESTS
+  # =================================================================
+  security-tests:
+    name: 🔒 Security Tests
+    runs-on: ubuntu-latest
+    needs: setup
+    if: github.event.inputs.test_type == 'all' || github.event.inputs.test_type == 'security'
+    timeout-minutes: 25
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: 'testing/package-lock.json'
+
+      - name: 📦 Install dependencies
+        working-directory: testing
+        run: npm ci --prefer-offline --no-audit
+
+      - name: 🐳 Start test environment with ZAP
+        run: |
+          cd testing
+          docker-compose -f docker-compose.test.yml up -d
+          
+          # Wait for all services including ZAP
+          timeout 300 bash -c 'until curl -f http://localhost:3001/health; do sleep 5; done'
+          timeout 300 bash -c 'until curl -f http://localhost:8080; do sleep 10; done'
+
+      - name: 🔒 Run security tests
+        working-directory: testing
+        run: npm run test:security
+        env:
+          ZAP_PROXY: http://localhost:8080
+          TARGET_URL: http://localhost:3001
+
+      - name: 📊 Upload security test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-test-results
+          path: testing/reports/security/
+          retention-days: 7
+
+      - name: 🐳 Cleanup
+        if: always()
+        run: |
+          cd testing
+          docker-compose -f docker-compose.test.yml down -v
+
+  # =================================================================
+  # TEST REPORTING
+  # =================================================================
+  test-summary:
+    name: 📊 Test Summary
+    runs-on: ubuntu-latest
+    needs: [unit-tests, integration-tests, e2e-tests]
+    if: always()
+    timeout-minutes: 10
+    steps:
+      - name: 📥 Download all test results
+        uses: actions/download-artifact@v4
+        with:
+          path: test-results
+
+      - name: 📊 Generate test summary
+        run: |
+          echo "# 🧪 Test Results Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Unit Tests
+          if [ -d "test-results/unit-test-results-node-18" ]; then
+            echo "## ✅ Unit Tests" >> $GITHUB_STEP_SUMMARY
+            echo "- Status: Completed" >> $GITHUB_STEP_SUMMARY
+            echo "- Coverage reports available in artifacts" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Integration Tests  
+          if [ -d "test-results/integration-test-results" ]; then
+            echo "## ✅ Integration Tests" >> $GITHUB_STEP_SUMMARY
+            echo "- Status: Completed" >> $GITHUB_STEP_SUMMARY
+            echo "- Database and API integration tested" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # E2E Tests
+          echo "## ✅ End-to-End Tests" >> $GITHUB_STEP_SUMMARY
+          for browser in chromium firefox webkit; do
+            if [ -d "test-results/e2e-test-results-$browser" ]; then
+              echo "- $browser: ✅ Completed" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Performance Tests
+          if [ -d "test-results/performance-test-results" ]; then
+            echo "## ⚡ Performance Tests" >> $GITHUB_STEP_SUMMARY
+            echo "- Status: Completed" >> $GITHUB_STEP_SUMMARY
+            echo "- Load testing results available" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Security Tests
+          if [ -d "test-results/security-test-results" ]; then
+            echo "## 🔒 Security Tests" >> $GITHUB_STEP_SUMMARY
+            echo "- Status: Completed" >> $GITHUB_STEP_SUMMARY
+            echo "- OWASP ZAP security scan results available" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: 🏷️ Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            if (fs.existsSync(process.env.GITHUB_STEP_SUMMARY)) {
+              const summary = fs.readFileSync(process.env.GITHUB_STEP_SUMMARY, 'utf8');
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: summary
+              });
+            }
+
+  # =================================================================
+  # DEPLOYMENT READINESS CHECK
+  # =================================================================
+  deployment-readiness:
+    name: 🚀 Deployment Readiness
+    runs-on: ubuntu-latest
+    needs: [unit-tests, integration-tests, e2e-tests]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    timeout-minutes: 5
+    steps:
+      - name: ✅ All tests passed
+        run: |
+          echo "🎉 All tests have passed successfully!"
+          echo "📦 Ready for deployment to staging/production"
+          echo "::notice title=Deployment Ready::All automated tests completed successfully"
+
+      - name: 🏷️ Create deployment tag
+        if: success()
+        run: |
+          echo "Creating deployment tag..."
+          # This would typically trigger deployment workflows
+          echo "deployment-ready-$(date +%Y%m%d-%H%M%S)" > deployment-tag.txt
+
+      - name: 📊 Upload deployment artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-ready
+          path: deployment-tag.txt
+          retention-days: 30

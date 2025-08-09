@@ -1,0 +1,285 @@
+# =================================================================
+# DOCKER COMPOSE FOR TESTING ENVIRONMENT
+# =================================================================
+#
+# This compose file sets up all necessary services for testing:
+# - MongoDB for database tests
+# - Redis for caching tests
+# - Mock external services
+# - OWASP ZAP for security testing
+# - Test applications
+#
+# Usage:
+#   docker-compose -f docker-compose.test.yml up -d
+#   docker-compose -f docker-compose.test.yml down -v
+#
+# =================================================================
+
+services:
+  # Test Database - MongoDB
+  mongo-test:
+    image: mongo:7.0
+    container_name: mongo-test
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: testuser
+      MONGO_INITDB_ROOT_PASSWORD: testpass
+      MONGO_INITDB_DATABASE: test_microservices
+    volumes:
+      - mongo-test-data:/data/db
+      - ./config/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    networks:
+      - test-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Test Cache - Redis
+  redis-test:
+    image: redis:7.2-alpine
+    container_name: redis-test
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --requirepass testpass
+    volumes:
+      - redis-test-data:/data
+    networks:
+      - test-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # OWASP ZAP for Security Testing
+  zap:
+    image: zaproxy/zap-stable:latest
+    container_name: zap-test
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    command: zap.sh -daemon -host 0.0.0.0 -port 8080 -config api.disablekey=true
+    volumes:
+      - zap-data:/zap/wrk
+    networks:
+      - test-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  # Mock External API Service
+  mock-external-api:
+    image: wiremock/wiremock:3.3.1
+    container_name: mock-external-api
+    restart: unless-stopped
+    ports:
+      - "3002:8080"
+    command: --global-response-templating --verbose
+    volumes:
+      - ./config/wiremock/mappings:/home/wiremock/mappings:ro
+      - ./config/wiremock/__files:/home/wiremock/__files:ro
+    networks:
+      - test-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/__admin/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Mock Payment Service
+  mock-payment-service:
+    image: wiremock/wiremock:3.3.1
+    container_name: mock-payment-service
+    restart: unless-stopped
+    ports:
+      - "3003:8080"
+    command: --global-response-templating --verbose
+    volumes:
+      - ./config/wiremock-payment/mappings:/home/wiremock/mappings:ro
+      - ./config/wiremock-payment/__files:/home/wiremock/__files:ro
+    networks:
+      - test-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/__admin/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Test Application Backend
+  test-app-backend:
+    build:
+      context: ../src
+      dockerfile: Dockerfile.test
+    container_name: test-app-backend
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      NODE_ENV: test
+      PORT: 3001
+      MONGODB_URI: mongodb://testuser:testpass@mongo-test:27017/test_microservices?authSource=admin
+      REDIS_URI: redis://:testpass@redis-test:6379/1
+      JWT_SECRET: test-jwt-secret-key-for-testing-only
+      LOG_LEVEL: error
+    depends_on:
+      mongo-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+    networks:
+      - test-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # Test Application Frontend
+  test-app-frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile.test
+    container_name: test-app-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: test
+      REACT_APP_API_URL: http://localhost:3001
+      REACT_APP_ENVIRONMENT: test
+    depends_on:
+      test-app-backend:
+        condition: service_healthy
+    networks:
+      - test-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # K6 Load Testing (can be started separately)
+  k6:
+    image: grafana/k6:latest
+    container_name: k6-test
+    restart: "no"
+    volumes:
+      - ./performance:/scripts
+      - ./reports:/reports
+    networks:
+      - test-network
+    environment:
+      K6_OUT: json=/reports/k6-results.json
+      K6_WEB_DASHBOARD: "true"
+      K6_WEB_DASHBOARD_EXPORT: /reports/k6-dashboard.html
+    profiles:
+      - performance
+
+  # Elasticsearch for Test Logging (Optional)
+  elasticsearch-test:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: elasticsearch-test
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - xpack.security.enabled=false
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch-test-data:/usr/share/elasticsearch/data
+    networks:
+      - test-network
+    profiles:
+      - logging
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Kibana for Test Log Visualization (Optional)
+  kibana-test:
+    image: docker.elastic.co/kibana/kibana:8.11.0
+    container_name: kibana-test
+    restart: unless-stopped
+    ports:
+      - "5601:5601"
+    environment:
+      ELASTICSEARCH_HOSTS: http://elasticsearch-test:9200
+    depends_on:
+      elasticsearch-test:
+        condition: service_healthy
+    networks:
+      - test-network
+    profiles:
+      - logging
+
+  # Test Results Viewer (Custom service to view test reports)
+  test-reports-viewer:
+    image: nginx:alpine
+    container_name: test-reports-viewer
+    restart: unless-stopped
+    ports:
+      - "8888:80"
+    volumes:
+      - ./reports:/usr/share/nginx/html:ro
+      - ./config/nginx-reports.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - test-network
+    profiles:
+      - reports
+
+# Networks
+networks:
+  test-network:
+    driver: bridge
+    name: test-network
+
+# Volumes
+volumes:
+  mongo-test-data:
+    name: mongo-test-data
+  redis-test-data:
+    name: redis-test-data
+  elasticsearch-test-data:
+    name: elasticsearch-test-data
+  zap-data:
+    name: zap-data
+# =================================================================
+# USAGE EXAMPLES
+# =================================================================
+#
+# Start core test services:
+#   docker-compose -f docker-compose.test.yml up -d
+#
+# Start with performance testing:
+#   docker-compose -f docker-compose.test.yml --profile performance up -d
+#
+# Start with logging:
+#   docker-compose -f docker-compose.test.yml --profile logging up -d
+#
+# Start with test reports viewer:
+#   docker-compose -f docker-compose.test.yml --profile reports up -d
+#
+# Start everything:
+#   docker-compose -f docker-compose.test.yml --profile performance --profile logging --profile reports up -d
+#
+# View logs:
+#   docker-compose -f docker-compose.test.yml logs -f [service-name]
+#
+# Stop and remove everything:
+#   docker-compose -f docker-compose.test.yml down -v
+#
+# =================================================================
