@@ -1,0 +1,491 @@
+---
+# Canary Deployment for API Gateway (Stable Version)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway-stable
+  namespace: microservices
+  labels:
+    app: api-gateway
+    version: stable
+    deployment-strategy: canary
+spec:
+  replicas: 8  # 80% of traffic
+  selector:
+    matchLabels:
+      app: api-gateway
+      version: stable
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+        version: stable
+        deployment-strategy: canary
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: api-gateway
+        image: node:18-alpine
+        ports:
+        - containerPort: 3000
+          name: http
+        - containerPort: 9090
+          name: metrics
+        env:
+        - name: VERSION
+          value: "stable"
+        - name: DEPLOYMENT_STRATEGY
+          value: "canary"
+        - name: TRAFFIC_PERCENTAGE
+          value: "80"
+        command: ["node", "-e"]
+        args:
+          - |
+            const http = require('http');
+            const url = require('url');
+            
+            let requestCount = 0;
+            let healthyRequests = 0;
+            const startTime = Date.now();
+            const version = process.env.VERSION || 'stable';
+            const strategy = process.env.DEPLOYMENT_STRATEGY || 'canary';
+            const trafficPercentage = process.env.TRAFFIC_PERCENTAGE || '80';
+            
+            const server = http.createServer((req, res) => {
+              const parsedUrl = url.parse(req.url, true);
+              requestCount++;
+              
+              res.setHeader('Access-Control-Allow-Origin', '*');
+              res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+              res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+              res.setHeader('Content-Type', 'application/json');
+              res.setHeader('X-Version', version);
+              res.setHeader('X-Deployment-Strategy', strategy);
+              res.setHeader('X-Traffic-Percentage', trafficPercentage);
+              
+              if (req.method === 'OPTIONS') {
+                res.writeHead(200);
+                res.end();
+                return;
+              }
+              
+              if (parsedUrl.pathname === '/health') {
+                healthyRequests++;
+                res.writeHead(200);
+                res.end(JSON.stringify({
+                  service: 'api-gateway',
+                  version: version,
+                  strategy: strategy,
+                  trafficPercentage: trafficPercentage,
+                  status: 'healthy',
+                  uptime: Date.now() - startTime,
+                  requests: {
+                    total: requestCount,
+                    healthy: healthyRequests
+                  },
+                  timestamp: new Date().toISOString()
+                }));
+                return;
+              }
+              
+              if (parsedUrl.pathname === '/version') {
+                res.writeHead(200);
+                res.end(JSON.stringify({
+                  version: version,
+                  strategy: strategy,
+                  trafficPercentage: trafficPercentage,
+                  build: 'stable-v1.0.0',
+                  features: ['auth', 'products', 'orders', 'monitoring']
+                }));
+                return;
+              }
+              
+              if (parsedUrl.pathname === '/api/status') {
+                res.writeHead(200);
+                res.end(JSON.stringify({
+                  gateway: 'operational',
+                  version: version,
+                  strategy: strategy,
+                  trafficPercentage: trafficPercentage,
+                  services: {
+                    auth: 'connected',
+                    products: 'connected',
+                    orders: 'connected'
+                  },
+                  load: {
+                    requests: requestCount,
+                    uptime: Math.floor((Date.now() - startTime) / 1000)
+                  }
+                }));
+                return;
+              }
+              
+              // Default routing
+              res.writeHead(200);
+              res.end(JSON.stringify({
+                message: 'API Gateway Stable Version',
+                version: version,
+                strategy: strategy,
+                trafficPercentage: trafficPercentage,
+                path: parsedUrl.pathname
+              }));
+            });
+            
+            server.listen(3000, () => {
+              console.log(`API Gateway (${version}) listening on port 3000 - Canary Strategy (${trafficPercentage}% traffic)`);
+            });
+            
+            // Metrics server
+            const metricsServer = http.createServer((req, res) => {
+              if (req.url === '/metrics') {
+                const uptime = Math.floor((Date.now() - startTime) / 1000);
+                const metrics = `# HELP api_gateway_requests_total Total requests\\n# TYPE api_gateway_requests_total counter\\napi_gateway_requests_total{version="${version}",strategy="${strategy}",traffic="${trafficPercentage}"} ${requestCount}\\n# HELP api_gateway_uptime_seconds Uptime\\n# TYPE api_gateway_uptime_seconds gauge\\napi_gateway_uptime_seconds{version="${version}",strategy="${strategy}",traffic="${trafficPercentage}"} ${uptime}`;
+                res.writeHead(200, { 'Content-Type': 'text/plain' });
+                res.end(metrics);
+              } else {
+                res.writeHead(404);
+                res.end();
+              }
+            });
+            
+            metricsServer.listen(9090, () => {
+              console.log(`Metrics server (${version}) listening on port 9090`);
+            });
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+
+---
+# Canary Deployment for API Gateway (Canary Version)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway-canary
+  namespace: microservices
+  labels:
+    app: api-gateway
+    version: canary
+    deployment-strategy: canary
+spec:
+  replicas: 2  # 20% of traffic initially
+  selector:
+    matchLabels:
+      app: api-gateway
+      version: canary
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+        version: canary
+        deployment-strategy: canary
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: api-gateway
+        image: node:18-alpine
+        ports:
+        - containerPort: 3000
+          name: http
+        - containerPort: 9090
+          name: metrics
+        env:
+        - name: VERSION
+          value: "canary"
+        - name: DEPLOYMENT_STRATEGY
+          value: "canary"
+        - name: TRAFFIC_PERCENTAGE
+          value: "20"
+        - name: FEATURE_FLAGS
+          value: "analytics:true,caching:true,rate-limiting:true"
+        command: ["node", "-e"]
+        args:
+          - |
+            const http = require('http');
+            const url = require('url');
+            
+            let requestCount = 0;
+            let healthyRequests = 0;
+            let errorRequests = 0;
+            const startTime = Date.now();
+            const version = process.env.VERSION || 'canary';
+            const strategy = process.env.DEPLOYMENT_STRATEGY || 'canary';
+            const trafficPercentage = process.env.TRAFFIC_PERCENTAGE || '20';
+            const featureFlags = process.env.FEATURE_FLAGS || '';
+            
+            // Parse feature flags
+            const features = {};
+            featureFlags.split(',').forEach(flag => {
+              const [key, value] = flag.split(':');
+              features[key] = value === 'true';
+            });
+            
+            const server = http.createServer((req, res) => {
+              const parsedUrl = url.parse(req.url, true);
+              requestCount++;
+              
+              res.setHeader('Access-Control-Allow-Origin', '*');
+              res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+              res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+              res.setHeader('Content-Type', 'application/json');
+              res.setHeader('X-Version', version);
+              res.setHeader('X-Deployment-Strategy', strategy);
+              res.setHeader('X-Traffic-Percentage', trafficPercentage);
+              res.setHeader('X-Feature-Flags', JSON.stringify(features));
+              res.setHeader('X-Canary-Release', 'true');
+              
+              if (req.method === 'OPTIONS') {
+                res.writeHead(200);
+                res.end();
+                return;
+              }
+              
+              if (parsedUrl.pathname === '/health') {
+                healthyRequests++;
+                res.writeHead(200);
+                res.end(JSON.stringify({
+                  service: 'api-gateway',
+                  version: version,
+                  strategy: strategy,
+                  trafficPercentage: trafficPercentage,
+                  status: 'healthy',
+                  uptime: Date.now() - startTime,
+                  features: features,
+                  canaryRelease: true,
+                  requests: {
+                    total: requestCount,
+                    healthy: healthyRequests,
+                    errors: errorRequests
+                  },
+                  timestamp: new Date().toISOString()
+                }));
+                return;
+              }
+              
+              if (parsedUrl.pathname === '/version') {
+                res.writeHead(200);
+                res.end(JSON.stringify({
+                  version: version,
+                  strategy: strategy,
+                  trafficPercentage: trafficPercentage,
+                  build: 'canary-v2.0.0-beta',
+                  features: Object.keys(features).filter(f => features[f]),
+                  canaryRelease: true,
+                  experimental: true
+                }));
+                return;
+              }
+              
+              // New feature: Enhanced analytics (only in canary)
+              if (parsedUrl.pathname === '/api/analytics' && features.analytics) {
+                res.writeHead(200);
+                res.end(JSON.stringify({
+                  service: 'enhanced-analytics',
+                  version: version,
+                  strategy: strategy,
+                  canaryFeature: true,
+                  data: {
+                    requests: requestCount,
+                    uptime: Math.floor((Date.now() - startTime) / 1000),
+                    successRate: ((healthyRequests / requestCount) * 100).toFixed(2) + '%',
+                    errorRate: ((errorRequests / requestCount) * 100).toFixed(2) + '%',
+                    features: features
+                  }
+                }));
+                return;
+              }
+              
+              // New feature: Advanced caching (only in canary)
+              if (parsedUrl.pathname === '/api/cache' && features.caching) {
+                res.writeHead(200);
+                res.end(JSON.stringify({
+                  service: 'advanced-cache',
+                  version: version,
+                  canaryFeature: true,
+                  cache: {
+                    enabled: true,
+                    hitRate: '92%',
+                    size: '256MB',
+                    ttl: '1h'
+                  }
+                }));
+                return;
+              }
+              
+              if (parsedUrl.pathname === '/api/status') {
+                res.writeHead(200);
+                res.end(JSON.stringify({
+                  gateway: 'operational',
+                  version: version,
+                  strategy: strategy,
+                  trafficPercentage: trafficPercentage,
+                  canaryRelease: true,
+                  services: {
+                    auth: 'connected',
+                    products: 'connected',
+                    orders: 'connected',
+                    analytics: features.analytics ? 'enabled' : 'disabled',
+                    cache: features.caching ? 'enabled' : 'disabled'
+                  },
+                  load: {
+                    requests: requestCount,
+                    uptime: Math.floor((Date.now() - startTime) / 1000)
+                  },
+                  experimental: {
+                    features: features,
+                    build: 'canary-v2.0.0-beta'
+                  }
+                }));
+                return;
+              }
+              
+              // Enhanced routing with new features
+              res.writeHead(200);
+              res.end(JSON.stringify({
+                message: 'API Gateway Canary Version (Enhanced)',
+                version: version,
+                strategy: strategy,
+                trafficPercentage: trafficPercentage,
+                path: parsedUrl.pathname,
+                canaryRelease: true,
+                features: features,
+                enhancement: 'This request was processed by the canary version with new features!'
+              }));
+            });
+            
+            server.listen(3000, () => {
+              console.log(`API Gateway (${version}) listening on port 3000 - Canary Strategy (${trafficPercentage}% traffic)`);
+              console.log(`Features enabled: ${JSON.stringify(features)}`);
+            });
+            
+            // Enhanced metrics server
+            const metricsServer = http.createServer((req, res) => {
+              if (req.url === '/metrics') {
+                const uptime = Math.floor((Date.now() - startTime) / 1000);
+                const featureList = Object.keys(features).filter(f => features[f]).join(',');
+                const metrics = `# HELP api_gateway_requests_total Total requests\\n# TYPE api_gateway_requests_total counter\\napi_gateway_requests_total{version="${version}",strategy="${strategy}",traffic="${trafficPercentage}",features="${featureList}"} ${requestCount}\\n# HELP api_gateway_uptime_seconds Uptime\\n# TYPE api_gateway_uptime_seconds gauge\\napi_gateway_uptime_seconds{version="${version}",strategy="${strategy}",traffic="${trafficPercentage}",features="${featureList}"} ${uptime}\\n# HELP api_gateway_canary_requests Canary-specific requests\\n# TYPE api_gateway_canary_requests counter\\napi_gateway_canary_requests{version="${version}",features="${featureList}"} ${requestCount}`;
+                res.writeHead(200, { 'Content-Type': 'text/plain' });
+                res.end(metrics);
+              } else {
+                res.writeHead(404);
+                res.end();
+              }
+            });
+            
+            metricsServer.listen(9090, () => {
+              console.log(`Metrics server (${version}) listening on port 9090`);
+            });
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+
+---
+# Canary Service (Unified - distributes traffic between stable and canary)
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway-canary-service
+  namespace: microservices
+  labels:
+    app: api-gateway
+    deployment-strategy: canary
+  annotations:
+    deployment.strategy: "canary"
+    traffic.stable: "80"
+    traffic.canary: "20"
+spec:
+  type: NodePort
+  ports:
+  - port: 3000
+    targetPort: 3000
+    nodePort: 30100
+    name: http
+  - port: 9090
+    targetPort: 9090
+    name: metrics
+  selector:
+    app: api-gateway
+    deployment-strategy: canary
+
+---
+# Service for Stable Version (Individual access)
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway-stable-service
+  namespace: microservices
+  labels:
+    app: api-gateway
+    version: stable
+spec:
+  type: ClusterIP
+  ports:
+  - port: 3000
+    targetPort: 3000
+    name: http
+  - port: 9090
+    targetPort: 9090
+    name: metrics
+  selector:
+    app: api-gateway
+    version: stable
+
+---
+# Service for Canary Version (Individual access)
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway-canary-only
+  namespace: microservices
+  labels:
+    app: api-gateway
+    version: canary
+spec:
+  type: ClusterIP
+  ports:
+  - port: 3000
+    targetPort: 3000
+    name: http
+  - port: 9090
+    targetPort: 9090
+    name: metrics
+  selector:
+    app: api-gateway
+    version: canary

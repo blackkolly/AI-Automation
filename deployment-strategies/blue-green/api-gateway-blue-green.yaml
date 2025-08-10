@@ -1,0 +1,539 @@
+---
+# Blue-Green Deployment for API Gateway
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway-blue
+  namespace: microservices
+  labels:
+    app: api-gateway
+    version: blue
+    deployment-strategy: blue-green
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: api-gateway
+      version: blue
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+        version: blue
+        deployment-strategy: blue-green
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: api-gateway
+        image: node:18-alpine
+        ports:
+        - containerPort: 3000
+          name: http
+        - containerPort: 9090
+          name: metrics
+        env:
+        - name: VERSION
+          value: "blue"
+        - name: DEPLOYMENT_STRATEGY
+          value: "blue-green"
+        - name: AUTH_SERVICE_URL
+          value: "http://auth-service:3001"
+        - name: PRODUCT_SERVICE_URL
+          value: "http://product-service:80"
+        - name: ORDER_SERVICE_URL
+          value: "http://order-service:3003"
+        command: ["node", "-e"]
+        args:
+          - |
+            const http = require('http');
+            const url = require('url');
+            
+            let requestCount = 0;
+            let healthyRequests = 0;
+            let errorRequests = 0;
+            const startTime = Date.now();
+            
+            // Blue-Green specific configuration
+            const version = process.env.VERSION || 'blue';
+            const deploymentStrategy = process.env.DEPLOYMENT_STRATEGY || 'blue-green';
+            
+            const server = http.createServer((req, res) => {
+              const parsedUrl = url.parse(req.url, true);
+              requestCount++;
+              
+              res.setHeader('Access-Control-Allow-Origin', '*');
+              res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+              res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+              res.setHeader('Content-Type', 'application/json');
+              res.setHeader('X-Version', version);
+              res.setHeader('X-Deployment-Strategy', deploymentStrategy);
+              
+              if (req.method === 'OPTIONS') {
+                res.writeHead(200);
+                res.end();
+                return;
+              }
+              
+              if (parsedUrl.pathname === '/health') {
+                healthyRequests++;
+                res.writeHead(200);
+                res.end(JSON.stringify({
+                  service: 'api-gateway',
+                  version: version,
+                  strategy: deploymentStrategy,
+                  status: 'healthy',
+                  uptime: Date.now() - startTime,
+                  requests: {
+                    total: requestCount,
+                    healthy: healthyRequests,
+                    errors: errorRequests
+                  },
+                  timestamp: new Date().toISOString()
+                }));
+                return;
+              }
+              
+              if (parsedUrl.pathname === '/version') {
+                res.writeHead(200);
+                res.end(JSON.stringify({
+                  version: version,
+                  strategy: deploymentStrategy,
+                  environment: 'blue',
+                  build: 'stable',
+                  features: ['auth', 'products', 'orders', 'monitoring']
+                }));
+                return;
+              }
+              
+              if (parsedUrl.pathname === '/api/status') {
+                res.writeHead(200);
+                res.end(JSON.stringify({
+                  gateway: 'operational',
+                  version: version,
+                  strategy: deploymentStrategy,
+                  services: {
+                    auth: 'connected',
+                    products: 'connected',
+                    orders: 'connected'
+                  },
+                  load: {
+                    requests: requestCount,
+                    uptime: Math.floor((Date.now() - startTime) / 1000)
+                  }
+                }));
+                return;
+              }
+              
+              if (parsedUrl.pathname === '/metrics') {
+                const uptime = Math.floor((Date.now() - startTime) / 1000);
+                const metrics = `# HELP api_gateway_requests_total Total number of requests
+# TYPE api_gateway_requests_total counter
+api_gateway_requests_total{version="${version}",strategy="${deploymentStrategy}"} ${requestCount}
+
+# HELP api_gateway_healthy_requests_total Total number of healthy requests
+# TYPE api_gateway_healthy_requests_total counter
+api_gateway_healthy_requests_total{version="${version}",strategy="${deploymentStrategy}"} ${healthyRequests}
+
+# HELP api_gateway_uptime_seconds Uptime in seconds
+# TYPE api_gateway_uptime_seconds gauge
+api_gateway_uptime_seconds{version="${version}",strategy="${deploymentStrategy}"} ${uptime}
+`;
+                res.writeHead(200, { 'Content-Type': 'text/plain' });
+                res.end(metrics);
+                return;
+              }
+              
+              // Route to appropriate service
+              if (parsedUrl.pathname.startsWith('/auth/')) {
+                // Proxy to auth service
+                res.writeHead(200);
+                res.end(JSON.stringify({
+                  service: 'auth-service',
+                  gateway_version: version,
+                  strategy: deploymentStrategy,
+                  message: 'Auth service routing (Blue Environment)'
+                }));
+                return;
+              }
+              
+              if (parsedUrl.pathname.startsWith('/products/') || parsedUrl.pathname === '/products') {
+                res.writeHead(200);
+                res.end(JSON.stringify({
+                  service: 'product-service',
+                  gateway_version: version,
+                  strategy: deploymentStrategy,
+                  message: 'Product service routing (Blue Environment)',
+                  products: ['iPhone 15', 'MacBook Pro', 'iPad Air']
+                }));
+                return;
+              }
+              
+              if (parsedUrl.pathname.startsWith('/orders/') || parsedUrl.pathname === '/orders') {
+                res.writeHead(200);
+                res.end(JSON.stringify({
+                  service: 'order-service',
+                  gateway_version: version,
+                  strategy: deploymentStrategy,
+                  message: 'Order service routing (Blue Environment)',
+                  orders: []
+                }));
+                return;
+              }
+              
+              // Default 404
+              errorRequests++;
+              res.writeHead(404);
+              res.end(JSON.stringify({
+                error: 'Not Found',
+                version: version,
+                strategy: deploymentStrategy,
+                timestamp: new Date().toISOString()
+              }));
+            });
+            
+            server.listen(3000, () => {
+              console.log(`API Gateway (${version}) listening on port 3000 - Blue-Green Strategy`);
+            });
+            
+            // Metrics server
+            const metricsServer = http.createServer((req, res) => {
+              if (req.url === '/metrics') {
+                const uptime = Math.floor((Date.now() - startTime) / 1000);
+                const metrics = `api_gateway_requests_total{version="${version}",strategy="${deploymentStrategy}"} ${requestCount}
+api_gateway_healthy_requests_total{version="${version}",strategy="${deploymentStrategy}"} ${healthyRequests}
+api_gateway_uptime_seconds{version="${version}",strategy="${deploymentStrategy}"} ${uptime}`;
+                res.writeHead(200, { 'Content-Type': 'text/plain' });
+                res.end(metrics);
+              } else {
+                res.writeHead(404);
+                res.end();
+              }
+            });
+            
+            metricsServer.listen(9090, () => {
+              console.log(`Metrics server (${version}) listening on port 9090`);
+            });
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+
+---
+# Blue-Green Deployment for API Gateway (Green Version)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway-green
+  namespace: microservices
+  labels:
+    app: api-gateway
+    version: green
+    deployment-strategy: blue-green
+spec:
+  replicas: 0  # Initially scaled to 0
+  selector:
+    matchLabels:
+      app: api-gateway
+      version: green
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+        version: green
+        deployment-strategy: blue-green
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: api-gateway
+        image: node:18-alpine
+        ports:
+        - containerPort: 3000
+          name: http
+        - containerPort: 9090
+          name: metrics
+        env:
+        - name: VERSION
+          value: "green"
+        - name: DEPLOYMENT_STRATEGY
+          value: "blue-green"
+        - name: AUTH_SERVICE_URL
+          value: "http://auth-service:3001"
+        - name: PRODUCT_SERVICE_URL
+          value: "http://product-service:80"
+        - name: ORDER_SERVICE_URL
+          value: "http://order-service:3003"
+        command: ["node", "-e"]
+        args:
+          - |
+            const http = require('http');
+            const url = require('url');
+            
+            let requestCount = 0;
+            let healthyRequests = 0;
+            let errorRequests = 0;
+            const startTime = Date.now();
+            
+            // Green version with new features
+            const version = process.env.VERSION || 'green';
+            const deploymentStrategy = process.env.DEPLOYMENT_STRATEGY || 'blue-green';
+            
+            const server = http.createServer((req, res) => {
+              const parsedUrl = url.parse(req.url, true);
+              requestCount++;
+              
+              res.setHeader('Access-Control-Allow-Origin', '*');
+              res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+              res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+              res.setHeader('Content-Type', 'application/json');
+              res.setHeader('X-Version', version);
+              res.setHeader('X-Deployment-Strategy', deploymentStrategy);
+              res.setHeader('X-New-Features', 'analytics,caching,rate-limiting');
+              
+              if (req.method === 'OPTIONS') {
+                res.writeHead(200);
+                res.end();
+                return;
+              }
+              
+              if (parsedUrl.pathname === '/health') {
+                healthyRequests++;
+                res.writeHead(200);
+                res.end(JSON.stringify({
+                  service: 'api-gateway',
+                  version: version,
+                  strategy: deploymentStrategy,
+                  status: 'healthy',
+                  uptime: Date.now() - startTime,
+                  newFeatures: ['analytics', 'caching', 'rate-limiting'],
+                  requests: {
+                    total: requestCount,
+                    healthy: healthyRequests,
+                    errors: errorRequests
+                  },
+                  timestamp: new Date().toISOString()
+                }));
+                return;
+              }
+              
+              if (parsedUrl.pathname === '/version') {
+                res.writeHead(200);
+                res.end(JSON.stringify({
+                  version: version,
+                  strategy: deploymentStrategy,
+                  environment: 'green',
+                  build: 'latest',
+                  features: ['auth', 'products', 'orders', 'monitoring', 'analytics', 'caching', 'rate-limiting']
+                }));
+                return;
+              }
+              
+              // New feature: Analytics endpoint
+              if (parsedUrl.pathname === '/api/analytics') {
+                res.writeHead(200);
+                res.end(JSON.stringify({
+                  service: 'analytics',
+                  version: version,
+                  strategy: deploymentStrategy,
+                  data: {
+                    totalRequests: requestCount,
+                    uptime: Math.floor((Date.now() - startTime) / 1000),
+                    successRate: ((healthyRequests / requestCount) * 100).toFixed(2) + '%',
+                    errorRate: ((errorRequests / requestCount) * 100).toFixed(2) + '%'
+                  },
+                  newFeature: true
+                }));
+                return;
+              }
+              
+              if (parsedUrl.pathname === '/api/status') {
+                res.writeHead(200);
+                res.end(JSON.stringify({
+                  gateway: 'operational',
+                  version: version,
+                  strategy: deploymentStrategy,
+                  services: {
+                    auth: 'connected',
+                    products: 'connected',
+                    orders: 'connected',
+                    analytics: 'enabled'  // New service
+                  },
+                  load: {
+                    requests: requestCount,
+                    uptime: Math.floor((Date.now() - startTime) / 1000)
+                  },
+                  cache: {
+                    enabled: true,
+                    hitRate: '85%'
+                  }
+                }));
+                return;
+              }
+              
+              // Same routing logic but with enhanced features
+              if (parsedUrl.pathname.startsWith('/auth/')) {
+                res.writeHead(200);
+                res.end(JSON.stringify({
+                  service: 'auth-service',
+                  gateway_version: version,
+                  strategy: deploymentStrategy,
+                  message: 'Auth service routing (Green Environment - Enhanced)',
+                  rateLimiting: 'enabled',
+                  caching: 'enabled'
+                }));
+                return;
+              }
+              
+              if (parsedUrl.pathname.startsWith('/products/') || parsedUrl.pathname === '/products') {
+                res.writeHead(200);
+                res.end(JSON.stringify({
+                  service: 'product-service',
+                  gateway_version: version,
+                  strategy: deploymentStrategy,
+                  message: 'Product service routing (Green Environment - Enhanced)',
+                  products: ['iPhone 15 Pro', 'MacBook Pro M3', 'iPad Air M2', 'Apple Watch Ultra'],
+                  analytics: 'tracking enabled',
+                  caching: 'enabled'
+                }));
+                return;
+              }
+              
+              if (parsedUrl.pathname.startsWith('/orders/') || parsedUrl.pathname === '/orders') {
+                res.writeHead(200);
+                res.end(JSON.stringify({
+                  service: 'order-service',
+                  gateway_version: version,
+                  strategy: deploymentStrategy,
+                  message: 'Order service routing (Green Environment - Enhanced)',
+                  orders: [],
+                  analytics: 'tracking enabled',
+                  caching: 'enabled'
+                }));
+                return;
+              }
+              
+              errorRequests++;
+              res.writeHead(404);
+              res.end(JSON.stringify({
+                error: 'Not Found',
+                version: version,
+                strategy: deploymentStrategy,
+                timestamp: new Date().toISOString()
+              }));
+            });
+            
+            server.listen(3000, () => {
+              console.log(`API Gateway (${version}) listening on port 3000 - Blue-Green Strategy (Enhanced)`);
+            });
+            
+            const metricsServer = http.createServer((req, res) => {
+              if (req.url === '/metrics') {
+                const uptime = Math.floor((Date.now() - startTime) / 1000);
+                const metrics = `api_gateway_requests_total{version="${version}",strategy="${deploymentStrategy}"} ${requestCount}
+api_gateway_healthy_requests_total{version="${version}",strategy="${deploymentStrategy}"} ${healthyRequests}
+api_gateway_uptime_seconds{version="${version}",strategy="${deploymentStrategy}"} ${uptime}`;
+                res.writeHead(200, { 'Content-Type': 'text/plain' });
+                res.end(metrics);
+              } else {
+                res.writeHead(404);
+                res.end();
+              }
+            });
+            
+            metricsServer.listen(9090, () => {
+              console.log(`Metrics server (${version}) listening on port 9090`);
+            });
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+
+---
+# Blue-Green Service (Active/Standby switching)
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway-active
+  namespace: microservices
+  labels:
+    app: api-gateway
+    service-type: active
+    deployment-strategy: blue-green
+  annotations:
+    deployment.strategy: "blue-green"
+    active.version: "blue"
+spec:
+  type: NodePort
+  ports:
+  - port: 3000
+    targetPort: 3000
+    nodePort: 30000
+    name: http
+  - port: 9090
+    targetPort: 9090
+    name: metrics
+  selector:
+    app: api-gateway
+    version: blue  # Initially points to blue
+
+---
+# Blue-Green Service for Green (Standby)
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway-standby
+  namespace: microservices
+  labels:
+    app: api-gateway
+    service-type: standby
+    deployment-strategy: blue-green
+  annotations:
+    deployment.strategy: "blue-green"
+    standby.version: "green"
+spec:
+  type: ClusterIP
+  ports:
+  - port: 3000
+    targetPort: 3000
+    name: http
+  - port: 9090
+    targetPort: 9090
+    name: metrics
+  selector:
+    app: api-gateway
+    version: green  # Initially points to green

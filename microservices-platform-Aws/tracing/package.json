@@ -1,0 +1,54 @@
+{
+  "name": "@microservices-platform/tracing",
+  "version": "1.0.0",
+  "description": "Centralized Jaeger distributed tracing module for microservices platform",
+  "main": "index.js",
+  "directories": {
+    "configs": "configs",
+    "middleware": "middleware",
+    "k8s": "k8s",
+    "scripts": "scripts",
+    "docs": "docs"
+  },
+  "scripts": {
+    "deploy": "./scripts/deploy-jaeger-enabled.sh",
+    "test": "./scripts/test-jaeger-tracing.sh",
+    "test-quick": "./scripts/test-jaeger-tracing.sh --quick"
+  },
+  "dependencies": {
+    "jaeger-client": "^3.19.0",
+    "opentracing": "^0.14.7"
+  },
+  "peerDependencies": {
+    "express": ">=4.0.0"
+  },
+  "keywords": [
+    "jaeger",
+    "tracing",
+    "distributed-tracing",
+    "microservices",
+    "observability",
+    "monitoring",
+    "opentracing"
+  ],
+  "author": "Microservices Platform Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/your-org/microservices-platform.git",
+    "directory": "tracing"
+  },
+  "bugs": {
+    "url": "https://github.com/your-org/microservices-platform/issues"
+  },
+  "homepage": "https://github.com/your-org/microservices-platform/tree/main/tracing#readme",
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "files": [
+    "index.js",
+    "configs/",
+    "middleware/",
+    "README.md"
+  ]
+}

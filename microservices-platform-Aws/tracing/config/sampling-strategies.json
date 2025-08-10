@@ -1,0 +1,85 @@
+{
+  "service_strategies": [
+    {
+      "service": "user-service",
+      "type": "probabilistic",
+      "param": 0.5,
+      "operation_strategies": [
+        {
+          "operation": "GET /health",
+          "type": "probabilistic",
+          "param": 0.1
+        },
+        {
+          "operation": "POST /users",
+          "type": "const",
+          "param": 1
+        }
+      ]
+    },
+    {
+      "service": "payment-service",
+      "type": "const",
+      "param": 1,
+      "operation_strategies": [
+        {
+          "operation": "GET /health",
+          "type": "probabilistic",
+          "param": 0.1
+        }
+      ]
+    },
+    {
+      "service": "notification-service",
+      "type": "probabilistic",
+      "param": 0.3
+    },
+    {
+      "service": "frontend",
+      "type": "probabilistic",
+      "param": 0.2,
+      "operation_strategies": [
+        {
+          "operation": "GET /static/*",
+          "type": "probabilistic",
+          "param": 0.01
+        }
+      ]
+    },
+    {
+      "service": "order-service",
+      "type": "adaptive",
+      "max_traces_per_second": 100,
+      "operation_strategies": [
+        {
+          "operation": "POST /orders",
+          "type": "const",
+          "param": 1
+        },
+        {
+          "operation": "GET /orders/:id",
+          "type": "probabilistic",
+          "param": 0.5
+        }
+      ]
+    }
+  ],
+  "default_strategy": {
+    "type": "probabilistic",
+    "param": 0.1
+  },
+  "per_operation_strategies": [
+    {
+      "service": "*",
+      "operation": "GET /health",
+      "type": "probabilistic",
+      "param": 0.05
+    },
+    {
+      "service": "*",
+      "operation": "GET /metrics",
+      "type": "probabilistic",
+      "param": 0.01
+    }
+  ]
+}

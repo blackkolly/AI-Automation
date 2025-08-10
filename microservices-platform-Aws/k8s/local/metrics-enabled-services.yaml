@@ -1,0 +1,394 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: product-service-metrics
+  namespace: microservices
+  labels:
+    app: product-service-metrics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: product-service-metrics
+  template:
+    metadata:
+      labels:
+        app: product-service-metrics
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3000"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: product-service
+        image: node:18-alpine
+        ports:
+        - containerPort: 3000
+        - containerPort: 9090
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: SERVICE_NAME
+          value: "product-service"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        command: ["node", "-e"]
+        args:
+        - |
+          const http = require('http');
+          const url = require('url');
+          
+          // Metrics storage
+          let metrics = {
+            http_requests_total: 0,
+            http_request_duration_seconds: [],
+            products_retrieved: 0,
+            service_up: 1
+          };
+          
+          // Products data
+          const products = [
+            { id: 1, name: 'Laptop', price: 999.99, stock: 50 },
+            { id: 2, name: 'Phone', price: 699.99, stock: 100 },
+            { id: 3, name: 'Tablet', price: 399.99, stock: 75 }
+          ];
+          
+          function formatMetrics() {
+            const duration_avg = metrics.http_request_duration_seconds.length > 0 
+              ? metrics.http_request_duration_seconds.reduce((a,b) => a + b, 0) / metrics.http_request_duration_seconds.length 
+              : 0;
+              
+            return `# HELP http_requests_total Total HTTP requests
+# TYPE http_requests_total counter
+http_requests_total{service="product-service"} ${metrics.http_requests_total}
+
+# HELP http_request_duration_seconds HTTP request duration
+# TYPE http_request_duration_seconds gauge
+http_request_duration_seconds{service="product-service"} ${duration_avg.toFixed(3)}
+
+# HELP products_retrieved_total Total products retrieved
+# TYPE products_retrieved_total counter
+products_retrieved_total{service="product-service"} ${metrics.products_retrieved}
+
+# HELP service_up Service availability
+# TYPE service_up gauge
+service_up{service="product-service"} ${metrics.service_up}
+
+# HELP nodejs_memory_usage Node.js memory usage
+# TYPE nodejs_memory_usage gauge
+nodejs_memory_usage{service="product-service"} ${process.memoryUsage().heapUsed}
+`;
+          }
+          
+          const server = http.createServer((req, res) => {
+            const startTime = Date.now();
+            const parsedUrl = url.parse(req.url, true);
+            
+            metrics.http_requests_total++;
+            
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE');
+            res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+            
+            if (req.method === 'OPTIONS') {
+              res.writeHead(200);
+              res.end();
+              return;
+            }
+            
+            // Metrics endpoint
+            if (parsedUrl.pathname === '/metrics') {
+              res.writeHead(200, { 'Content-Type': 'text/plain' });
+              res.end(formatMetrics());
+              return;
+            }
+            
+            // Health endpoint
+            if (parsedUrl.pathname === '/health') {
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ status: 'healthy', timestamp: new Date().toISOString() }));
+              return;
+            }
+            
+            // Products endpoints
+            if (parsedUrl.pathname === '/products') {
+              metrics.products_retrieved++;
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify(products));
+            } else if (parsedUrl.pathname.startsWith('/products/')) {
+              const id = parseInt(parsedUrl.pathname.split('/')[2]);
+              const product = products.find(p => p.id === id);
+              if (product) {
+                metrics.products_retrieved++;
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(product));
+              } else {
+                res.writeHead(404, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Product not found' }));
+              }
+            } else {
+              res.writeHead(404, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Not found' }));
+            }
+            
+            // Record request duration
+            const duration = (Date.now() - startTime) / 1000;
+            metrics.http_request_duration_seconds.push(duration);
+            if (metrics.http_request_duration_seconds.length > 100) {
+              metrics.http_request_duration_seconds.shift();
+            }
+          });
+          
+          server.listen(3000, () => {
+            console.log('Product service with metrics running on port 3000');
+          });
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: product-service-metrics
+  namespace: microservices
+  labels:
+    app: product-service-metrics
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "3000"
+    prometheus.io/path: "/metrics"
+spec:
+  selector:
+    app: product-service-metrics
+  ports:
+  - name: http
+    port: 3000
+    targetPort: 3000
+  - name: metrics
+    port: 9090
+    targetPort: 3000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service-metrics
+  namespace: microservices
+  labels:
+    app: order-service-metrics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: order-service-metrics
+  template:
+    metadata:
+      labels:
+        app: order-service-metrics
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3001"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: order-service
+        image: node:18-alpine
+        ports:
+        - containerPort: 3001
+        - containerPort: 9091
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: SERVICE_NAME
+          value: "order-service"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        command: ["node", "-e"]
+        args:
+        - |
+          const http = require('http');
+          const url = require('url');
+          
+          // Metrics storage
+          let metrics = {
+            http_requests_total: 0,
+            http_request_duration_seconds: [],
+            orders_created: 0,
+            orders_retrieved: 0,
+            service_up: 1
+          };
+          
+          // Orders data
+          let orders = [
+            { id: 1, productId: 1, quantity: 2, status: 'completed', total: 1999.98 },
+            { id: 2, productId: 2, quantity: 1, status: 'pending', total: 699.99 }
+          ];
+          
+          function formatMetrics() {
+            const duration_avg = metrics.http_request_duration_seconds.length > 0 
+              ? metrics.http_request_duration_seconds.reduce((a,b) => a + b, 0) / metrics.http_request_duration_seconds.length 
+              : 0;
+              
+            return `# HELP http_requests_total Total HTTP requests
+# TYPE http_requests_total counter
+http_requests_total{service="order-service"} ${metrics.http_requests_total}
+
+# HELP http_request_duration_seconds HTTP request duration
+# TYPE http_request_duration_seconds gauge
+http_request_duration_seconds{service="order-service"} ${duration_avg.toFixed(3)}
+
+# HELP orders_created_total Total orders created
+# TYPE orders_created_total counter
+orders_created_total{service="order-service"} ${metrics.orders_created}
+
+# HELP orders_retrieved_total Total orders retrieved
+# TYPE orders_retrieved_total counter
+orders_retrieved_total{service="order-service"} ${metrics.orders_retrieved}
+
+# HELP service_up Service availability
+# TYPE service_up gauge
+service_up{service="order-service"} ${metrics.service_up}
+
+# HELP nodejs_memory_usage Node.js memory usage
+# TYPE nodejs_memory_usage gauge
+nodejs_memory_usage{service="order-service"} ${process.memoryUsage().heapUsed}
+`;
+          }
+          
+          const server = http.createServer((req, res) => {
+            const startTime = Date.now();
+            const parsedUrl = url.parse(req.url, true);
+            
+            metrics.http_requests_total++;
+            
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE');
+            res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+            
+            if (req.method === 'OPTIONS') {
+              res.writeHead(200);
+              res.end();
+              return;
+            }
+            
+            // Metrics endpoint
+            if (parsedUrl.pathname === '/metrics') {
+              res.writeHead(200, { 'Content-Type': 'text/plain' });
+              res.end(formatMetrics());
+              return;
+            }
+            
+            // Health endpoint
+            if (parsedUrl.pathname === '/health') {
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ status: 'healthy', timestamp: new Date().toISOString() }));
+              return;
+            }
+            
+            // Orders endpoints
+            if (parsedUrl.pathname === '/orders') {
+              if (req.method === 'GET') {
+                metrics.orders_retrieved++;
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(orders));
+              } else if (req.method === 'POST') {
+                let body = '';
+                req.on('data', chunk => body += chunk);
+                req.on('end', () => {
+                  try {
+                    const orderData = JSON.parse(body);
+                    const newOrder = {
+                      id: orders.length + 1,
+                      ...orderData,
+                      status: 'pending',
+                      createdAt: new Date().toISOString()
+                    };
+                    orders.push(newOrder);
+                    metrics.orders_created++;
+                    res.writeHead(201, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify(newOrder));
+                  } catch (error) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Invalid JSON' }));
+                  }
+                });
+              }
+            } else if (parsedUrl.pathname.startsWith('/orders/')) {
+              const id = parseInt(parsedUrl.pathname.split('/')[2]);
+              const order = orders.find(o => o.id === id);
+              if (order) {
+                metrics.orders_retrieved++;
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(order));
+              } else {
+                res.writeHead(404, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Order not found' }));
+              }
+            } else {
+              res.writeHead(404, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Not found' }));
+            }
+            
+            // Record request duration
+            const duration = (Date.now() - startTime) / 1000;
+            metrics.http_request_duration_seconds.push(duration);
+            if (metrics.http_request_duration_seconds.length > 100) {
+              metrics.http_request_duration_seconds.shift();
+            }
+          });
+          
+          server.listen(3001, () => {
+            console.log('Order service with metrics running on port 3001');
+          });
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3001
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3001
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-service-metrics
+  namespace: microservices
+  labels:
+    app: order-service-metrics
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "3001"
+    prometheus.io/path: "/metrics"
+spec:
+  selector:
+    app: order-service-metrics
+  ports:
+  - name: http
+    port: 3001
+    targetPort: 3001
+  - name: metrics
+    port: 9091
+    targetPort: 3001

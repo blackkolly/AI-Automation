@@ -1,0 +1,82 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: microservices-platform-production
+  namespace: gitops
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  labels:
+    app.kubernetes.io/name: microservices-platform
+    app.kubernetes.io/component: production
+spec:
+  project: microservices-platform
+  source:
+    repoURL: https://github.com/blackkolly/AI-Automation.git
+    targetRevision: main
+    path: microservices-platform/kubernetes/manifests
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+  syncPolicy:
+    automated:
+      prune: false # Set to false initially for safety
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+  revisionHistoryLimit: 10
+  info:
+    - name: "Environment"
+      value: "Production"
+    - name: "Repository"
+      value: "https://github.com/blackkolly/AI-Automation"
+    - name: "Services"
+      value: "api-gateway, auth-service, order-service, product-service, frontend"
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: microservices-platform-staging
+  namespace: gitops
+  labels:
+    app.kubernetes.io/name: microservices-platform
+    app.kubernetes.io/component: staging
+spec:
+  project: microservices-platform
+  source:
+    repoURL: https://github.com/blackkolly/AI-Automation.git
+    targetRevision: main # Using main branch for now since you don't have develop
+    path: microservices-platform/kubernetes/manifests
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: staging
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 2m
+  revisionHistoryLimit: 5
+  info:
+    - name: "Environment"
+      value: "Staging"
+    - name: "Repository"
+      value: "https://github.com/blackkolly/AI-Automation"

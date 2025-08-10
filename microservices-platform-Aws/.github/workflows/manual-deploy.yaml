@@ -1,0 +1,81 @@
+name: Manual Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      service:
+        description: "Service to deploy (or all)"
+        required: true
+        type: choice
+        options:
+          - all
+          - api-gateway
+          - auth-service
+          - order-service
+          - product-service
+          - frontend
+      image_tag:
+        description: "Docker image tag (default: latest)"
+        required: false
+        default: "latest"
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REGISTRY: 779066052352.dkr.ecr.us-east-1.amazonaws.com
+  EKS_CLUSTER_NAME: microservices-platform-prod
+
+jobs:
+  manual-deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: "1.28.0"
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.EKS_CLUSTER_NAME }}
+
+      - name: Deploy to ${{ github.event.inputs.environment }}
+        run: |
+          NAMESPACE="${{ github.event.inputs.environment == 'staging' && 'staging' || 'default' }}"
+          SERVICE="${{ github.event.inputs.service }}"
+          TAG="${{ github.event.inputs.image_tag }}"
+
+          echo "Deploying $SERVICE to $NAMESPACE with tag $TAG"
+
+          if [ "$SERVICE" = "all" ]; then
+            SERVICES=("api-gateway" "auth-service" "order-service" "product-service" "frontend")
+          else
+            SERVICES=("$SERVICE")
+          fi
+
+          for svc in "${SERVICES[@]}"; do
+            echo "Updating $svc..."
+            kubectl set image deployment/$svc $svc=${{ env.ECR_REGISTRY }}/$svc:$TAG -n $NAMESPACE
+            kubectl rollout status deployment/$svc -n $NAMESPACE --timeout=300s
+          done
+
+      - name: Verify deployment
+        run: |
+          NAMESPACE="${{ github.event.inputs.environment == 'staging' && 'staging' || 'default' }}"
+          kubectl get pods -n $NAMESPACE
+          kubectl get services -n $NAMESPACE
