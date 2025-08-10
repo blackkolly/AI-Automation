@@ -1,0 +1,779 @@
+---
+# Velero namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: velero
+
+---
+# Velero ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: velero
+  namespace: velero
+
+---
+# Velero ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: velero
+rules:
+- apiGroups: ["*"]
+  resources: ["*"]
+  verbs: ["*"]
+- nonResourceURLs: ["*"]
+  verbs: ["*"]
+
+---
+# Velero ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: velero
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: velero
+subjects:
+- kind: ServiceAccount
+  name: velero
+  namespace: velero
+
+---
+# BackupStorageLocation CRD
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: backupstoragelocations.velero.io
+spec:
+  group: velero.io
+  versions:
+  - name: v1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              provider:
+                type: string
+              objectStorage:
+                type: object
+                properties:
+                  bucket:
+                    type: string
+                  prefix:
+                    type: string
+              config:
+                type: object
+                additionalProperties:
+                  type: string
+          status:
+            type: object
+  scope: Namespaced
+  names:
+    plural: backupstoragelocations
+    singular: backupstoragelocation
+    kind: BackupStorageLocation
+
+---
+# VolumeSnapshotLocation CRD
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: volumesnapshotlocations.velero.io
+spec:
+  group: velero.io
+  versions:
+  - name: v1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              provider:
+                type: string
+              config:
+                type: object
+                additionalProperties:
+                  type: string
+          status:
+            type: object
+  scope: Namespaced
+  names:
+    plural: volumesnapshotlocations
+    singular: volumesnapshotlocation
+    kind: VolumeSnapshotLocation
+
+---
+# Backup CRD
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: backups.velero.io
+spec:
+  group: velero.io
+  versions:
+  - name: v1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              includedNamespaces:
+                type: array
+                items:
+                  type: string
+              excludedNamespaces:
+                type: array
+                items:
+                  type: string
+              includedResources:
+                type: array
+                items:
+                  type: string
+              excludedResources:
+                type: array
+                items:
+                  type: string
+              labelSelector:
+                type: object
+              storageLocation:
+                type: string
+              ttl:
+                type: string
+              includeClusterResources:
+                type: boolean
+              hooks:
+                type: object
+          status:
+            type: object
+            properties:
+              phase:
+                type: string
+              startTimestamp:
+                type: string
+              completionTimestamp:
+                type: string
+              errors:
+                type: integer
+              warnings:
+                type: integer
+  scope: Namespaced
+  names:
+    plural: backups
+    singular: backup
+    kind: Backup
+
+---
+# Restore CRD
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: restores.velero.io
+spec:
+  group: velero.io
+  versions:
+  - name: v1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              backupName:
+                type: string
+              includedNamespaces:
+                type: array
+                items:
+                  type: string
+              excludedNamespaces:
+                type: array
+                items:
+                  type: string
+              includedResources:
+                type: array
+                items:
+                  type: string
+              excludedResources:
+                type: array
+                items:
+                  type: string
+              namespaceMapping:
+                type: object
+                additionalProperties:
+                  type: string
+              restorePVs:
+                type: boolean
+          status:
+            type: object
+            properties:
+              phase:
+                type: string
+              warnings:
+                type: integer
+              errors:
+                type: integer
+  scope: Namespaced
+  names:
+    plural: restores
+    singular: restore
+    kind: Restore
+
+---
+# Schedule CRD
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: schedules.velero.io
+spec:
+  group: velero.io
+  versions:
+  - name: v1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              schedule:
+                type: string
+              template:
+                type: object
+          status:
+            type: object
+            properties:
+              lastBackup:
+                type: string
+              phase:
+                type: string
+  scope: Namespaced
+  names:
+    plural: schedules
+    singular: schedule
+    kind: Schedule
+
+---
+# ServerStatusRequest CRD
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: serverstatusrequests.velero.io
+spec:
+  group: velero.io
+  versions:
+  - name: v1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+          status:
+            type: object
+            properties:
+              phase:
+                type: string
+  scope: Namespaced
+  names:
+    plural: serverstatusrequests
+    singular: serverstatusrequest
+    kind: ServerStatusRequest
+
+---
+# DownloadRequest CRD
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: downloadrequests.velero.io
+spec:
+  group: velero.io
+  versions:
+  - name: v1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              target:
+                type: object
+          status:
+            type: object
+            properties:
+              phase:
+                type: string
+              downloadURL:
+                type: string
+  scope: Namespaced
+  names:
+    plural: downloadrequests
+    singular: downloadrequest
+    kind: DownloadRequest
+
+---
+# DeleteBackupRequest CRD
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: deletebackuprequests.velero.io
+spec:
+  group: velero.io
+  versions:
+  - name: v1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              backupName:
+                type: string
+          status:
+            type: object
+            properties:
+              phase:
+                type: string
+  scope: Namespaced
+  names:
+    plural: deletebackuprequests
+    singular: deletebackuprequest
+    kind: DeleteBackupRequest
+
+---
+# PodVolumeBackup CRD
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: podvolumebackups.velero.io
+spec:
+  group: velero.io
+  versions:
+  - name: v1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              node:
+                type: string
+              pod:
+                type: object
+              volume:
+                type: string
+          status:
+            type: object
+            properties:
+              phase:
+                type: string
+  scope: Namespaced
+  names:
+    plural: podvolumebackups
+    singular: podvolumebackup
+    kind: PodVolumeBackup
+
+---
+# PodVolumeRestore CRD
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: podvolumerestores.velero.io
+spec:
+  group: velero.io
+  versions:
+  - name: v1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              pod:
+                type: object
+              volume:
+                type: string
+          status:
+            type: object
+            properties:
+              phase:
+                type: string
+  scope: Namespaced
+  names:
+    plural: podvolumerestores
+    singular: podvolumerestore
+    kind: PodVolumeRestore
+
+---
+# BackupRepository CRD
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: backuprepositories.velero.io
+spec:
+  group: velero.io
+  versions:
+  - name: v1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              volumeNamespace:
+                type: string
+              backupStorageLocation:
+                type: string
+          status:
+            type: object
+            properties:
+              phase:
+                type: string
+  scope: Namespaced
+  names:
+    plural: backuprepositories
+    singular: backuprepository
+    kind: BackupRepository
+
+---
+# DataUpload CRD (v2alpha1)
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: datauploads.velero.io
+spec:
+  group: velero.io
+  versions:
+  - name: v2alpha1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              backupStorageLocation:
+                type: string
+              sourcePVC:
+                type: string
+          status:
+            type: object
+            properties:
+              phase:
+                type: string
+  scope: Namespaced
+  names:
+    plural: datauploads
+    singular: dataupload
+    kind: DataUpload
+
+---
+# DataDownload CRD (v2alpha1)
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: datadownloads.velero.io
+spec:
+  group: velero.io
+  versions:
+  - name: v2alpha1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              backupStorageLocation:
+                type: string
+              targetPVC:
+                type: string
+          status:
+            type: object
+            properties:
+              phase:
+                type: string
+  scope: Namespaced
+  names:
+    plural: datadownloads
+    singular: datadownload
+    kind: DataDownload
+
+---
+# Velero Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: velero
+  namespace: velero
+  labels:
+    app: velero
+    component: velero
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: velero
+      component: velero
+  template:
+    metadata:
+      labels:
+        app: velero
+        component: velero
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8085"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: velero
+      containers:
+      - name: velero
+        image: velero/velero:v1.12.0
+        ports:
+        - containerPort: 8085
+          name: metrics
+        command:
+        - /velero
+        args:
+        - server
+        - --log-level=info
+        - --log-format=text
+        - --metrics-address=0.0.0.0:8085
+        - --plugin-dir=/plugins
+        - --backup-sync-period=60m
+        - --fs-backup-timeout=240m
+        - --default-backup-storage-location=default
+        - --store-validation-frequency=168h
+        - --uploader-type=restic
+        volumeMounts:
+        - name: plugins
+          mountPath: /plugins
+        - name: scratch
+          mountPath: /scratch
+        - name: certs
+          mountPath: /etc/ssl/certs
+        - name: backup-storage
+          mountPath: /backup-storage
+        env:
+        - name: VELERO_SCRATCH_DIR
+          value: /scratch
+        - name: VELERO_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: LD_LIBRARY_PATH
+          value: /plugins
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /metrics
+            port: 8085
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /metrics
+            port: 8085
+          initialDelaySeconds: 10
+          periodSeconds: 5
+      volumes:
+      - name: plugins
+        emptyDir: {}
+      - name: scratch
+        emptyDir: {}
+      - name: certs
+        hostPath:
+          path: /etc/ssl/certs
+      - name: backup-storage
+        persistentVolumeClaim:
+          claimName: velero-backup-storage
+
+---
+# Velero Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: velero
+  namespace: velero
+  labels:
+    app: velero
+    component: velero
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8085
+    targetPort: 8085
+    name: metrics
+  selector:
+    app: velero
+    component: velero
+
+---
+---
+# Velero Backup Storage PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: velero-backup-storage
+  namespace: velero
+  labels:
+    app: velero
+    component: backup-storage
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi
+  storageClassName: standard
+
+---
+# Default BackupStorageLocation (Local filesystem)
+apiVersion: velero.io/v1
+kind: BackupStorageLocation
+metadata:
+  name: default
+  namespace: velero
+spec:
+  provider: filesystem
+  objectStorage:
+    bucket: local-backup
+    prefix: velero
+  config:
+    path: "/backup-storage"
+
+---
+# Default VolumeSnapshotLocation (Local)
+apiVersion: velero.io/v1
+kind: VolumeSnapshotLocation
+metadata:
+  name: default
+  namespace: velero
+spec:
+  provider: kubernetes.io/no-provisioner
+  config: {}
+
+---
+# Restic DaemonSet for file-level backup
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: restic
+  namespace: velero
+  labels:
+    app: restic
+    component: velero
+spec:
+  selector:
+    matchLabels:
+      app: restic
+      component: velero
+  template:
+    metadata:
+      labels:
+        app: restic
+        component: velero
+    spec:
+      serviceAccountName: velero
+      securityContext:
+        runAsUser: 0
+      containers:
+      - name: restic
+        image: velero/velero:v1.12.0
+        command:
+        - /velero
+        args:
+        - node-agent
+        - server
+        - --log-level=info
+        - --log-format=text
+        - --metrics-address=0.0.0.0:8085
+        ports:
+        - containerPort: 8085
+          name: metrics
+        volumeMounts:
+        - name: host-pods
+          mountPath: /host_pods
+          mountPropagation: HostToContainer
+        - name: scratch
+          mountPath: /scratch
+        - name: certs
+          mountPath: /etc/ssl/certs
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: VELERO_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: VELERO_SCRATCH_DIR
+          value: /scratch
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+      volumes:
+      - name: host-pods
+        hostPath:
+          path: /var/lib/kubelet/pods
+      - name: scratch
+        emptyDir: {}
+      - name: certs
+        hostPath:
+          path: /etc/ssl/certs
+      tolerations:
+      - effect: NoSchedule
+        operator: Exists
+      - effect: NoExecute
+        operator: Exists

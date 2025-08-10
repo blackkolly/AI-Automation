@@ -1,0 +1,352 @@
+---
+# ETCD Backup Job ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: etcd-backup-script
+  namespace: kube-system
+data:
+  backup.sh: |
+    #!/bin/bash
+    set -euo pipefail
+    
+    # Configuration
+    ETCD_ENDPOINTS=${ETCD_ENDPOINTS:-"https://127.0.0.1:2379"}
+    BACKUP_DIR=${BACKUP_DIR:-"/backup"}
+    BACKUP_NAME="etcd-backup-$(date +%Y%m%d_%H%M%S).db"
+    BACKUP_PATH="${BACKUP_DIR}/${BACKUP_NAME}"
+    
+    # Certificates
+    ETCD_CACERT=${ETCD_CACERT:-"/etc/kubernetes/pki/etcd/ca.crt"}
+    ETCD_CERT=${ETCD_CERT:-"/etc/kubernetes/pki/etcd/server.crt"}
+    ETCD_KEY=${ETCD_KEY:-"/etc/kubernetes/pki/etcd/server.key"}
+    
+    echo "Starting ETCD backup at $(date)"
+    echo "Backup will be saved to: ${BACKUP_PATH}"
+    
+    # Create backup directory
+    mkdir -p "${BACKUP_DIR}"
+    
+    # Perform backup
+    ETCDCTL_API=3 etcdctl snapshot save "${BACKUP_PATH}" \
+      --endpoints="${ETCD_ENDPOINTS}" \
+      --cacert="${ETCD_CACERT}" \
+      --cert="${ETCD_CERT}" \
+      --key="${ETCD_KEY}"
+    
+    # Verify backup
+    echo "Verifying backup integrity..."
+    ETCDCTL_API=3 etcdctl snapshot status "${BACKUP_PATH}" \
+      --write-out=table
+    
+    # Compress backup
+    echo "Compressing backup..."
+    gzip "${BACKUP_PATH}"
+    COMPRESSED_BACKUP="${BACKUP_PATH}.gz"
+    
+    # Get backup size
+    BACKUP_SIZE=$(du -h "${COMPRESSED_BACKUP}" | cut -f1)
+    echo "Backup completed successfully"
+    echo "Compressed backup size: ${BACKUP_SIZE}"
+    echo "Backup location: ${COMPRESSED_BACKUP}"
+    
+    # Cleanup old backups (keep last 7 days)
+    echo "Cleaning up old backups..."
+    find "${BACKUP_DIR}" -name "etcd-backup-*.db.gz" -mtime +7 -delete
+    
+    echo "ETCD backup process completed at $(date)"
+
+---
+# ETCD Backup CronJob
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: etcd-backup
+  namespace: kube-system
+  labels:
+    app: etcd-backup
+    component: backup
+spec:
+  schedule: "0 */6 * * *"  # Every 6 hours
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: etcd-backup
+            component: backup
+        spec:
+          restartPolicy: OnFailure
+          nodeSelector:
+            node-role.kubernetes.io/control-plane: ""
+          tolerations:
+          - effect: NoSchedule
+            operator: Exists
+          - effect: NoExecute
+            operator: Exists
+          hostNetwork: true
+          containers:
+          - name: etcd-backup
+            image: bitnami/etcd:3.5.9
+            command:
+            - /bin/bash
+            - /scripts/backup.sh
+            env:
+            - name: ETCD_ENDPOINTS
+              value: "https://127.0.0.1:2379"
+            - name: BACKUP_DIR
+              value: "/backup"
+            volumeMounts:
+            - name: etcd-certs
+              mountPath: /etc/kubernetes/pki/etcd
+              readOnly: true
+            - name: backup-storage
+              mountPath: /backup
+            - name: backup-script
+              mountPath: /scripts
+              readOnly: true
+            resources:
+              requests:
+                memory: "64Mi"
+                cpu: "50m"
+              limits:
+                memory: "256Mi"
+                cpu: "200m"
+          volumes:
+          - name: etcd-certs
+            hostPath:
+              path: /etc/kubernetes/pki/etcd
+              type: Directory
+          - name: backup-storage
+            persistentVolumeClaim:
+              claimName: etcd-backup-pvc
+          - name: backup-script
+            configMap:
+              name: etcd-backup-script
+              defaultMode: 0755
+
+---
+# ETCD Backup PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: etcd-backup-pvc
+  namespace: kube-system
+  labels:
+    app: etcd-backup
+    component: storage
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard
+
+---
+# ETCD Backup Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: etcd-backup-config
+  namespace: kube-system
+data:
+  retention-days: "7"
+  backup-frequency: "6h"
+  compression: "gzip"
+  verification: "enabled"
+
+---
+# ETCD Restore Job Template
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: etcd-restore
+  namespace: kube-system
+  labels:
+    app: etcd-restore
+    component: recovery
+spec:
+  template:
+    metadata:
+      labels:
+        app: etcd-restore
+        component: recovery
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: ""
+      tolerations:
+      - effect: NoSchedule
+        operator: Exists
+      - effect: NoExecute
+        operator: Exists
+      hostNetwork: true
+      containers:
+      - name: etcd-restore
+        image: bitnami/etcd:3.5.9
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -euo pipefail
+          
+          echo "Starting ETCD restore process..."
+          
+          # Configuration
+          BACKUP_FILE=${BACKUP_FILE:-"latest"}
+          BACKUP_DIR="/backup"
+          ETCD_DATA_DIR="/var/lib/etcd"
+          
+          # Find latest backup if not specified
+          if [ "${BACKUP_FILE}" = "latest" ]; then
+            BACKUP_FILE=$(ls -t ${BACKUP_DIR}/etcd-backup-*.db.gz | head -n1)
+          fi
+          
+          echo "Using backup file: ${BACKUP_FILE}"
+          
+          # Extract backup if compressed
+          if [[ "${BACKUP_FILE}" == *.gz ]]; then
+            echo "Extracting compressed backup..."
+            gunzip -c "${BACKUP_FILE}" > "${BACKUP_DIR}/restore.db"
+            BACKUP_FILE="${BACKUP_DIR}/restore.db"
+          fi
+          
+          # Verify backup before restore
+          echo "Verifying backup integrity..."
+          ETCDCTL_API=3 etcdctl snapshot status "${BACKUP_FILE}" --write-out=table
+          
+          # Stop etcd (this should be done carefully in production)
+          echo "Preparing for restore..."
+          
+          # Restore from backup
+          echo "Restoring ETCD from backup..."
+          ETCDCTL_API=3 etcdctl snapshot restore "${BACKUP_FILE}" \
+            --data-dir="${ETCD_DATA_DIR}-restore" \
+            --name=master \
+            --initial-cluster=master=https://127.0.0.1:2380 \
+            --initial-advertise-peer-urls=https://127.0.0.1:2380
+          
+          echo "ETCD restore completed successfully"
+          echo "Restored data directory: ${ETCD_DATA_DIR}-restore"
+          echo "Please manually replace the original data directory and restart etcd"
+        env:
+        - name: BACKUP_FILE
+          value: "latest"  # Can be overridden
+        volumeMounts:
+        - name: etcd-data
+          mountPath: /var/lib/etcd
+        - name: backup-storage
+          mountPath: /backup
+          readOnly: true
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      volumes:
+      - name: etcd-data
+        hostPath:
+          path: /var/lib/etcd
+          type: Directory
+      - name: backup-storage
+        persistentVolumeClaim:
+          claimName: etcd-backup-pvc
+
+---
+# ETCD Backup Monitoring Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd-backup-monitor
+  namespace: kube-system
+  labels:
+    app: etcd-backup
+    component: monitoring
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: metrics
+  selector:
+    app: etcd-backup-monitor
+
+---
+# ETCD Backup Monitor Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: etcd-backup-monitor
+  namespace: kube-system
+  labels:
+    app: etcd-backup-monitor
+    component: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: etcd-backup-monitor
+  template:
+    metadata:
+      labels:
+        app: etcd-backup-monitor
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: backup-monitor
+        image: alpine:3.18
+        command:
+        - /bin/sh
+        - -c
+        - |
+          while true; do
+            echo "Checking backup status..."
+            
+            # Check latest backup
+            LATEST_BACKUP=$(ls -t /backup/etcd-backup-*.db.gz 2>/dev/null | head -n1 || echo "none")
+            
+            if [ "${LATEST_BACKUP}" != "none" ]; then
+              BACKUP_AGE=$(stat -c %Y "${LATEST_BACKUP}")
+              CURRENT_TIME=$(date +%s)
+              AGE_HOURS=$(( (CURRENT_TIME - BACKUP_AGE) / 3600 ))
+              
+              echo "Latest backup: ${LATEST_BACKUP}"
+              echo "Backup age: ${AGE_HOURS} hours"
+              
+              # Alert if backup is too old (> 8 hours)
+              if [ ${AGE_HOURS} -gt 8 ]; then
+                echo "WARNING: Latest backup is ${AGE_HOURS} hours old"
+              fi
+            else
+              echo "WARNING: No backups found"
+            fi
+            
+            sleep 300  # Check every 5 minutes
+          done
+        ports:
+        - containerPort: 8080
+          name: metrics
+        volumeMounts:
+        - name: backup-storage
+          mountPath: /backup
+          readOnly: true
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "25m"
+          limits:
+            memory: "64Mi"
+            cpu: "50m"
+      volumes:
+      - name: backup-storage
+        persistentVolumeClaim:
+          claimName: etcd-backup-pvc

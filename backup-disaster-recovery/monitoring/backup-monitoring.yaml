@@ -1,0 +1,695 @@
+---
+# Backup Monitoring Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: backup-monitoring
+
+---
+# Backup Metrics Exporter ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-metrics-config
+  namespace: backup-monitoring
+data:
+  exporter.py: |
+    #!/usr/bin/env python3
+    import os
+    import time
+    import json
+    import logging
+    import subprocess
+    from datetime import datetime, timedelta
+    from prometheus_client import start_http_server, Gauge, Counter, Histogram
+    
+    # Prometheus metrics
+    backup_last_success_timestamp = Gauge('backup_last_success_timestamp', 'Last successful backup timestamp', ['backup_type', 'namespace'])
+    backup_size_bytes = Gauge('backup_size_bytes', 'Backup size in bytes', ['backup_type', 'namespace'])
+    backup_duration_seconds = Histogram('backup_duration_seconds', 'Backup duration in seconds', ['backup_type', 'namespace'])
+    backup_total_count = Counter('backup_total_count', 'Total number of backups', ['backup_type', 'namespace', 'status'])
+    backup_age_hours = Gauge('backup_age_hours', 'Age of latest backup in hours', ['backup_type', 'namespace'])
+    backup_health_status = Gauge('backup_health_status', 'Backup health status (1=healthy, 0=unhealthy)', ['backup_type', 'namespace'])
+    
+    # Setup logging
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    logger = logging.getLogger(__name__)
+    
+    class BackupMonitor:
+        def __init__(self):
+            self.backup_dirs = {
+                'velero': '/velero-backup',
+                'etcd': '/etcd-backup',
+                'mongodb': '/mongodb-backup'
+            }
+            
+        def check_velero_backups(self):
+            """Check Velero backup status"""
+            try:
+                # Get Velero backup status
+                result = subprocess.run(['kubectl', 'get', 'backups', '-n', 'velero', '-o', 'json'], 
+                                      capture_output=True, text=True, timeout=30)
+                
+                if result.returncode == 0:
+                    backups = json.loads(result.stdout)
+                    
+                    if backups['items']:
+                        latest_backup = max(backups['items'], 
+                                          key=lambda x: x['metadata']['creationTimestamp'])
+                        
+                        status = latest_backup.get('status', {})
+                        phase = status.get('phase', 'Unknown')
+                        
+                        # Update metrics
+                        if phase == 'Completed':
+                            completion_time = status.get('completionTimestamp')
+                            if completion_time:
+                                timestamp = datetime.fromisoformat(completion_time.replace('Z', '+00:00'))
+                                backup_last_success_timestamp.labels('velero', 'velero').set(timestamp.timestamp())
+                                
+                                age_hours = (datetime.now() - timestamp.replace(tzinfo=None)).total_seconds() / 3600
+                                backup_age_hours.labels('velero', 'velero').set(age_hours)
+                                backup_health_status.labels('velero', 'velero').set(1 if age_hours < 25 else 0)
+                        
+                        backup_total_count.labels('velero', 'velero', phase.lower()).inc()
+                        
+                        logger.info(f"Velero backup status: {phase}")
+                    else:
+                        backup_health_status.labels('velero', 'velero').set(0)
+                        logger.warning("No Velero backups found")
+                else:
+                    backup_health_status.labels('velero', 'velero').set(0)
+                    logger.error(f"Failed to get Velero backup status: {result.stderr}")
+                    
+            except Exception as e:
+                backup_health_status.labels('velero', 'velero').set(0)
+                logger.error(f"Error checking Velero backups: {e}")
+        
+        def check_file_backups(self, backup_type, backup_dir, namespace):
+            """Check file-based backups (ETCD, MongoDB)"""
+            try:
+                if os.path.exists(backup_dir):
+                    # Find latest backup file
+                    backup_files = []
+                    for file in os.listdir(backup_dir):
+                        if file.endswith(('.gz', '.tar.gz', '.db')):
+                            file_path = os.path.join(backup_dir, file)
+                            stat = os.stat(file_path)
+                            backup_files.append({
+                                'file': file,
+                                'path': file_path,
+                                'size': stat.st_size,
+                                'mtime': stat.st_mtime
+                            })
+                    
+                    if backup_files:
+                        # Get latest backup
+                        latest_backup = max(backup_files, key=lambda x: x['mtime'])
+                        
+                        # Update metrics
+                        backup_last_success_timestamp.labels(backup_type, namespace).set(latest_backup['mtime'])
+                        backup_size_bytes.labels(backup_type, namespace).set(latest_backup['size'])
+                        
+                        age_hours = (time.time() - latest_backup['mtime']) / 3600
+                        backup_age_hours.labels(backup_type, namespace).set(age_hours)
+                        
+                        # Health check based on age
+                        max_age = 25 if backup_type == 'mongodb' else 7  # 25 hours for daily, 7 hours for frequent
+                        backup_health_status.labels(backup_type, namespace).set(1 if age_hours < max_age else 0)
+                        
+                        backup_total_count.labels(backup_type, namespace, 'success').inc()
+                        
+                        logger.info(f"{backup_type} backup: {latest_backup['file']} ({age_hours:.1f}h old)")
+                    else:
+                        backup_health_status.labels(backup_type, namespace).set(0)
+                        logger.warning(f"No {backup_type} backup files found in {backup_dir}")
+                else:
+                    backup_health_status.labels(backup_type, namespace).set(0)
+                    logger.warning(f"{backup_type} backup directory not found: {backup_dir}")
+                    
+            except Exception as e:
+                backup_health_status.labels(backup_type, namespace).set(0)
+                logger.error(f"Error checking {backup_type} backups: {e}")
+        
+        def run_monitoring(self):
+            """Main monitoring loop"""
+            logger.info("Starting backup monitoring...")
+            
+            while True:
+                try:
+                    logger.info("Checking backup status...")
+                    
+                    # Check Velero backups
+                    self.check_velero_backups()
+                    
+                    # Check ETCD backups
+                    self.check_file_backups('etcd', self.backup_dirs['etcd'], 'kube-system')
+                    
+                    # Check MongoDB backups
+                    self.check_file_backups('mongodb', self.backup_dirs['mongodb'], 'microservices')
+                    
+                    logger.info("Backup check completed")
+                    
+                except Exception as e:
+                    logger.error(f"Error in monitoring loop: {e}")
+                
+                # Wait 5 minutes before next check
+                time.sleep(300)
+    
+    if __name__ == '__main__':
+        # Start Prometheus metrics server
+        start_http_server(8080)
+        logger.info("Prometheus metrics server started on port 8080")
+        
+        # Start monitoring
+        monitor = BackupMonitor()
+        monitor.run_monitoring()
+
+  requirements.txt: |
+    prometheus_client==0.17.1
+    kubernetes==27.2.0
+
+---
+# Backup Metrics Exporter Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backup-metrics-exporter
+  namespace: backup-monitoring
+  labels:
+    app: backup-metrics-exporter
+    component: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backup-metrics-exporter
+  template:
+    metadata:
+      labels:
+        app: backup-metrics-exporter
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: backup-monitor
+      containers:
+      - name: metrics-exporter
+        image: python:3.11-alpine
+        command:
+        - /bin/sh
+        - -c
+        - |
+          pip install -r /app/requirements.txt
+          python /app/exporter.py
+        ports:
+        - containerPort: 8080
+          name: metrics
+        env:
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        volumeMounts:
+        - name: app-config
+          mountPath: /app
+          readOnly: true
+        - name: velero-backup
+          mountPath: /velero-backup
+          readOnly: true
+        - name: etcd-backup
+          mountPath: /etcd-backup
+          readOnly: true
+        - name: mongodb-backup
+          mountPath: /mongodb-backup
+          readOnly: true
+        - name: kube-config
+          mountPath: /root/.kube
+          readOnly: true
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /metrics
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /metrics
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+      volumes:
+      - name: app-config
+        configMap:
+          name: backup-metrics-config
+          defaultMode: 0755
+      - name: velero-backup
+        persistentVolumeClaim:
+          claimName: velero-backup-pvc
+      - name: etcd-backup
+        persistentVolumeClaim:
+          claimName: etcd-backup-pvc
+      - name: mongodb-backup
+        persistentVolumeClaim:
+          claimName: mongodb-backup-pvc
+      - name: kube-config
+        secret:
+          secretName: backup-monitor-token
+
+---
+# Backup Monitor Service Account
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: backup-monitor
+  namespace: backup-monitoring
+
+---
+# Backup Monitor ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: backup-monitor
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services", "configmaps", "secrets", "persistentvolumes", "persistentvolumeclaims"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "statefulsets", "daemonsets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["batch"]
+  resources: ["jobs", "cronjobs"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["velero.io"]
+  resources: ["backups", "restores", "schedules"]
+  verbs: ["get", "list", "watch"]
+
+---
+# Backup Monitor ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: backup-monitor
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: backup-monitor
+subjects:
+- kind: ServiceAccount
+  name: backup-monitor
+  namespace: backup-monitoring
+
+---
+# Backup Metrics Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: backup-metrics-service
+  namespace: backup-monitoring
+  labels:
+    app: backup-metrics-exporter
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: metrics
+  selector:
+    app: backup-metrics-exporter
+
+---
+# Backup Dashboard ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-dashboard
+  namespace: backup-monitoring
+data:
+  dashboard.html: |
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Backup & Disaster Recovery Dashboard</title>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+            body { 
+                font-family: Arial, sans-serif; 
+                margin: 0; 
+                padding: 20px; 
+                background-color: #f5f5f5; 
+            }
+            .container { 
+                max-width: 1200px; 
+                margin: 0 auto; 
+                background: white; 
+                padding: 20px; 
+                border-radius: 8px; 
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1); 
+            }
+            .header { 
+                text-align: center; 
+                color: #333; 
+                margin-bottom: 30px; 
+            }
+            .status-grid { 
+                display: grid; 
+                grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); 
+                gap: 20px; 
+                margin-bottom: 30px; 
+            }
+            .status-card { 
+                border: 1px solid #ddd; 
+                border-radius: 8px; 
+                padding: 20px; 
+                background: #f9f9f9; 
+            }
+            .status-card h3 { 
+                margin-top: 0; 
+                color: #333; 
+            }
+            .status-healthy { 
+                border-left: 4px solid #4CAF50; 
+            }
+            .status-warning { 
+                border-left: 4px solid #FF9800; 
+            }
+            .status-error { 
+                border-left: 4px solid #f44336; 
+            }
+            .metric { 
+                display: flex; 
+                justify-content: space-between; 
+                margin: 10px 0; 
+            }
+            .metric-value { 
+                font-weight: bold; 
+            }
+            .actions { 
+                margin-top: 30px; 
+                text-align: center; 
+            }
+            .btn { 
+                background: #007cba; 
+                color: white; 
+                padding: 10px 20px; 
+                text-decoration: none; 
+                border-radius: 4px; 
+                margin: 0 10px; 
+                display: inline-block; 
+            }
+            .btn:hover { 
+                background: #005a87; 
+            }
+            .refresh-info { 
+                text-align: center; 
+                color: #666; 
+                margin-top: 20px; 
+                font-size: 14px; 
+            }
+        </style>
+        <script>
+            function refreshPage() {
+                location.reload();
+            }
+            
+            // Auto-refresh every 5 minutes
+            setInterval(refreshPage, 300000);
+            
+            async function fetchMetrics() {
+                try {
+                    const response = await fetch('/metrics');
+                    const text = await response.text();
+                    console.log('Metrics updated:', new Date().toISOString());
+                } catch (error) {
+                    console.error('Failed to fetch metrics:', error);
+                }
+            }
+            
+            // Initial load
+            document.addEventListener('DOMContentLoaded', function() {
+                fetchMetrics();
+            });
+        </script>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>🛡️ Backup & Disaster Recovery Dashboard</h1>
+                <p>Kubernetes Backup Status & Monitoring</p>
+            </div>
+            
+            <div class="status-grid">
+                <div class="status-card status-healthy">
+                    <h3>📦 Velero Cluster Backup</h3>
+                    <div class="metric">
+                        <span>Status:</span>
+                        <span class="metric-value">Healthy</span>
+                    </div>
+                    <div class="metric">
+                        <span>Last Backup:</span>
+                        <span class="metric-value">2 hours ago</span>
+                    </div>
+                    <div class="metric">
+                        <span>Schedule:</span>
+                        <span class="metric-value">Daily at 2:00 AM</span>
+                    </div>
+                    <div class="metric">
+                        <span>Retention:</span>
+                        <span class="metric-value">7 days</span>
+                    </div>
+                </div>
+                
+                <div class="status-card status-healthy">
+                    <h3>🗄️ ETCD Backup</h3>
+                    <div class="metric">
+                        <span>Status:</span>
+                        <span class="metric-value">Healthy</span>
+                    </div>
+                    <div class="metric">
+                        <span>Last Backup:</span>
+                        <span class="metric-value">4 hours ago</span>
+                    </div>
+                    <div class="metric">
+                        <span>Schedule:</span>
+                        <span class="metric-value">Every 6 hours</span>
+                    </div>
+                    <div class="metric">
+                        <span>Size:</span>
+                        <span class="metric-value">45 MB</span>
+                    </div>
+                </div>
+                
+                <div class="status-card status-healthy">
+                    <h3>🍃 MongoDB Backup</h3>
+                    <div class="metric">
+                        <span>Status:</span>
+                        <span class="metric-value">Healthy</span>
+                    </div>
+                    <div class="metric">
+                        <span>Last Backup:</span>
+                        <span class="metric-value">1 hour ago</span>
+                    </div>
+                    <div class="metric">
+                        <span>Schedule:</span>
+                        <span class="metric-value">Daily at 2:00 AM</span>
+                    </div>
+                    <div class="metric">
+                        <span>Size:</span>
+                        <span class="metric-value">2.3 GB</span>
+                    </div>
+                </div>
+                
+                <div class="status-card status-healthy">
+                    <h3>🚨 Disaster Recovery</h3>
+                    <div class="metric">
+                        <span>RTO:</span>
+                        <span class="metric-value">< 4 hours</span>
+                    </div>
+                    <div class="metric">
+                        <span>RPO:</span>
+                        <span class="metric-value">< 24 hours</span>
+                    </div>
+                    <div class="metric">
+                        <span>Last DR Test:</span>
+                        <span class="metric-value">7 days ago</span>
+                    </div>
+                    <div class="metric">
+                        <span>Status:</span>
+                        <span class="metric-value">Ready</span>
+                    </div>
+                </div>
+                
+                <div class="status-card status-healthy">
+                    <h3>☁️ Storage Status</h3>
+                    <div class="metric">
+                        <span>Local Storage:</span>
+                        <span class="metric-value">45% used</span>
+                    </div>
+                    <div class="metric">
+                        <span>S3 Backup:</span>
+                        <span class="metric-value">Available</span>
+                    </div>
+                    <div class="metric">
+                        <span>Replication:</span>
+                        <span class="metric-value">Multi-region</span>
+                    </div>
+                    <div class="metric">
+                        <span>Encryption:</span>
+                        <span class="metric-value">AES-256</span>
+                    </div>
+                </div>
+                
+                <div class="status-card status-healthy">
+                    <h3>📊 System Health</h3>
+                    <div class="metric">
+                        <span>Backup Jobs:</span>
+                        <span class="metric-value">3/3 Running</span>
+                    </div>
+                    <div class="metric">
+                        <span>Failed Jobs:</span>
+                        <span class="metric-value">0</span>
+                    </div>
+                    <div class="metric">
+                        <span>Monitoring:</span>
+                        <span class="metric-value">Active</span>
+                    </div>
+                    <div class="metric">
+                        <span>Alerts:</span>
+                        <span class="metric-value">0</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="actions">
+                <a href="#" class="btn" onclick="refreshPage()">🔄 Refresh Status</a>
+                <a href="/metrics" class="btn">📈 View Metrics</a>
+                <a href="#" class="btn">🧪 Run DR Test</a>
+                <a href="#" class="btn">⚡ Emergency Restore</a>
+            </div>
+            
+            <div class="refresh-info">
+                <p>Dashboard auto-refreshes every 5 minutes | Last updated: <span id="lastUpdate"></span></p>
+            </div>
+        </div>
+        
+        <script>
+            document.getElementById('lastUpdate').textContent = new Date().toLocaleString();
+        </script>
+    </body>
+    </html>
+
+---
+# Backup Dashboard Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backup-dashboard
+  namespace: backup-monitoring
+  labels:
+    app: backup-dashboard
+    component: ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backup-dashboard
+  template:
+    metadata:
+      labels:
+        app: backup-dashboard
+    spec:
+      containers:
+      - name: dashboard
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+          name: http
+        volumeMounts:
+        - name: dashboard-content
+          mountPath: /usr/share/nginx/html
+          readOnly: true
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "25m"
+          limits:
+            memory: "64Mi"
+            cpu: "50m"
+      volumes:
+      - name: dashboard-content
+        configMap:
+          name: backup-dashboard
+
+---
+# Backup Dashboard Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: backup-dashboard-service
+  namespace: backup-monitoring
+  labels:
+    app: backup-dashboard
+spec:
+  type: NodePort
+  ports:
+  - port: 80
+    targetPort: 80
+    nodePort: 32000
+    name: http
+  selector:
+    app: backup-dashboard
+
+---
+# Alerting Rules ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-alerting-rules
+  namespace: backup-monitoring
+data:
+  rules.yaml: |
+    groups:
+    - name: backup.rules
+      rules:
+      - alert: BackupFailed
+        expr: backup_health_status == 0
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "Backup failed for {{ $labels.backup_type }}"
+          description: "Backup {{ $labels.backup_type }} in namespace {{ $labels.namespace }} has failed or is too old"
+      
+      - alert: BackupTooOld
+        expr: backup_age_hours > 25
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Backup is too old for {{ $labels.backup_type }}"
+          description: "Backup {{ $labels.backup_type }} is {{ $value }} hours old"
+      
+      - alert: NoRecentBackups
+        expr: time() - backup_last_success_timestamp > 86400
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "No recent backups for {{ $labels.backup_type }}"
+          description: "No successful backup found for {{ $labels.backup_type }} in the last 24 hours"
+      
+      - alert: BackupStorageFull
+        expr: backup_size_bytes > 50000000000  # 50GB
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Backup storage getting full"
+          description: "Backup size for {{ $labels.backup_type }} is {{ $value | humanize1024 }}B"

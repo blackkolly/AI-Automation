@@ -1,0 +1,22 @@
+apiVersion: velero.io/v1
+kind: BackupStorageLocation
+metadata:
+  name: default
+  namespace: velero
+spec:
+  provider: kubernetes.io/no-provisioner
+  objectStorage:
+    bucket: velero-backups
+  config:
+    path: /backups
+    local: "true"
+---
+apiVersion: velero.io/v1
+kind: VolumeSnapshotLocation
+metadata:
+  name: default
+  namespace: ve
+spec:
+  provider: kubernetes.io/noprovisioner
+  config:
+    region: local

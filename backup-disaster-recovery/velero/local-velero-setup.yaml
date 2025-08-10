@@ -1,0 +1,72 @@
+# Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: velero
+---
+# PVC for storing backups locally
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: velero-backup-storage
+  namespace: velero
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi
+---
+# Service Account
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: velero
+  namespace: velero
+---
+# ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: velero
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- kind: ServiceAccount
+  name: velero
+  namespace: velero
+---
+# Simple backup script deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backup-controller
+  namespace: velero
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backup-controller
+  template:
+    metadata:
+      labels:
+        app: backup-controller
+    spec:
+      serviceAccountName: velero
+      containers:
+      - name: backup-controller
+        image: alpine/k8s:1.28.2
+        command: ["/bin/sh"]
+        args: ["-c", "whil tue; do echo 'Backup controller running...er'; sleep 300; done"]
+        volumeMounts:
+        - name: backup-storage
+          mountPath: /backups
+        env:
+        - name: KUBECONFIG
+          value: /var/run/secrets/kubernetes.io/serviceaccount
+      volumes:
+      - name: backup-storage
+        persistentVolumeClaim:
+          claimName: velero-backup-storage

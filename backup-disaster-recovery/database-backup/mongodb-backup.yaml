@@ -1,0 +1,502 @@
+---
+# MongoDB Backup ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mongodb-backup-script
+  namespace: microservices
+data:
+  backup.sh: |
+    #!/bin/bash
+    set -euo pipefail
+    
+    # Configuration
+    MONGODB_HOST=${MONGODB_HOST:-"mongodb-service.microservices.svc.cluster.local"}
+    MONGODB_PORT=${MONGODB_PORT:-"27017"}
+    MONGODB_DATABASE=${MONGODB_DATABASE:-""}
+    BACKUP_DIR=${BACKUP_DIR:-"/backup"}
+    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    BACKUP_NAME="mongodb-backup-${TIMESTAMP}"
+    BACKUP_PATH="${BACKUP_DIR}/${BACKUP_NAME}"
+    
+    echo "Starting MongoDB backup at $(date)"
+    echo "MongoDB Host: ${MONGODB_HOST}:${MONGODB_PORT}"
+    echo "Backup will be saved to: ${BACKUP_PATH}"
+    
+    # Create backup directory
+    mkdir -p "${BACKUP_PATH}"
+    
+    # Build mongodump command
+    MONGODUMP_CMD="mongodump --host ${MONGODB_HOST}:${MONGODB_PORT} --out ${BACKUP_PATH}"
+    
+    # Add authentication if credentials are provided
+    if [ -n "${MONGODB_USERNAME:-}" ] && [ -n "${MONGODB_PASSWORD:-}" ]; then
+      MONGODUMP_CMD="${MONGODUMP_CMD} --username ${MONGODB_USERNAME} --password ${MONGODB_PASSWORD}"
+      if [ -n "${MONGODB_AUTH_DB:-}" ]; then
+        MONGODUMP_CMD="${MONGODUMP_CMD} --authenticationDatabase ${MONGODB_AUTH_DB}"
+      fi
+    fi
+    
+    # Add specific database if specified
+    if [ -n "${MONGODB_DATABASE}" ]; then
+      MONGODUMP_CMD="${MONGODUMP_CMD} --db ${MONGODB_DATABASE}"
+    fi
+    
+    # Perform backup
+    echo "Executing: ${MONGODUMP_CMD}"
+    eval "${MONGODUMP_CMD}"
+    
+    # Create metadata file
+    cat > "${BACKUP_PATH}/metadata.json" << EOF
+    {
+      "backup_timestamp": "${TIMESTAMP}",
+      "mongodb_host": "${MONGODB_HOST}:${MONGODB_PORT}",
+      "database": "${MONGODB_DATABASE:-"all"}",
+      "backup_type": "full",
+      "created_by": "kubernetes-cronjob"
+    }
+    EOF
+    
+    # Compress backup
+    echo "Compressing backup..."
+    cd "${BACKUP_DIR}"
+    tar -czf "${BACKUP_NAME}.tar.gz" "${BACKUP_NAME}"
+    rm -rf "${BACKUP_NAME}"
+    
+    # Get backup size
+    BACKUP_SIZE=$(du -h "${BACKUP_NAME}.tar.gz" | cut -f1)
+    echo "Backup completed successfully"
+    echo "Compressed backup size: ${BACKUP_SIZE}"
+    echo "Backup location: ${BACKUP_DIR}/${BACKUP_NAME}.tar.gz"
+    
+    # Cleanup old backups (keep last 7 days)
+    echo "Cleaning up old backups..."
+    find "${BACKUP_DIR}" -name "mongodb-backup-*.tar.gz" -mtime +7 -delete
+    
+    echo "MongoDB backup process completed at $(date)"
+  
+  restore.sh: |
+    #!/bin/bash
+    set -euo pipefail
+    
+    # Configuration
+    MONGODB_HOST=${MONGODB_HOST:-"mongodb-service.microservices.svc.cluster.local"}
+    MONGODB_PORT=${MONGODB_PORT:-"27017"}
+    BACKUP_DIR=${BACKUP_DIR:-"/backup"}
+    BACKUP_FILE=${BACKUP_FILE:-"latest"}
+    
+    echo "Starting MongoDB restore at $(date)"
+    echo "MongoDB Host: ${MONGODB_HOST}:${MONGODB_PORT}"
+    
+    # Find latest backup if not specified
+    if [ "${BACKUP_FILE}" = "latest" ]; then
+      BACKUP_FILE=$(ls -t ${BACKUP_DIR}/mongodb-backup-*.tar.gz | head -n1)
+    fi
+    
+    if [ ! -f "${BACKUP_FILE}" ]; then
+      echo "Error: Backup file not found: ${BACKUP_FILE}"
+      exit 1
+    fi
+    
+    echo "Using backup file: ${BACKUP_FILE}"
+    
+    # Extract backup
+    RESTORE_DIR="/tmp/restore-$(date +%s)"
+    mkdir -p "${RESTORE_DIR}"
+    tar -xzf "${BACKUP_FILE}" -C "${RESTORE_DIR}"
+    
+    # Find the extracted directory
+    EXTRACTED_DIR=$(find "${RESTORE_DIR}" -name "mongodb-backup-*" -type d | head -n1)
+    
+    if [ -z "${EXTRACTED_DIR}" ]; then
+      echo "Error: Could not find extracted backup directory"
+      exit 1
+    fi
+    
+    echo "Extracted backup to: ${EXTRACTED_DIR}"
+    
+    # Build mongorestore command
+    MONGORESTORE_CMD="mongorestore --host ${MONGODB_HOST}:${MONGODB_PORT} --drop"
+    
+    # Add authentication if credentials are provided
+    if [ -n "${MONGODB_USERNAME:-}" ] && [ -n "${MONGODB_PASSWORD:-}" ]; then
+      MONGORESTORE_CMD="${MONGORESTORE_CMD} --username ${MONGODB_USERNAME} --password ${MONGODB_PASSWORD}"
+      if [ -n "${MONGODB_AUTH_DB:-}" ]; then
+        MONGORESTORE_CMD="${MONGORESTORE_CMD} --authenticationDatabase ${MONGODB_AUTH_DB}"
+      fi
+    fi
+    
+    # Add the backup directory
+    MONGORESTORE_CMD="${MONGORESTORE_CMD} ${EXTRACTED_DIR}"
+    
+    # Perform restore
+    echo "Executing: ${MONGORESTORE_CMD}"
+    eval "${MONGORESTORE_CMD}"
+    
+    # Cleanup
+    rm -rf "${RESTORE_DIR}"
+    
+    echo "MongoDB restore completed successfully at $(date)"
+
+---
+# MongoDB Backup CronJob
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mongodb-backup
+  namespace: microservices
+  labels:
+    app: mongodb-backup
+    component: backup
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: mongodb-backup
+            component: backup
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: mongodb-backup
+            image: mongo:6.0
+            command:
+            - /bin/bash
+            - /scripts/backup.sh
+            env:
+            - name: MONGODB_HOST
+              value: "mongodb-service.microservices.svc.cluster.local"
+            - name: MONGODB_PORT
+              value: "27017"
+            - name: MONGODB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: mongodb-backup-secret
+                  key: username
+                  optional: true
+            - name: MONGODB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mongodb-backup-secret
+                  key: password
+                  optional: true
+            - name: MONGODB_AUTH_DB
+              value: "admin"
+            - name: BACKUP_DIR
+              value: "/backup"
+            volumeMounts:
+            - name: backup-storage
+              mountPath: /backup
+            - name: backup-script
+              mountPath: /scripts
+              readOnly: true
+            resources:
+              requests:
+                memory: "128Mi"
+                cpu: "100m"
+              limits:
+                memory: "512Mi"
+                cpu: "500m"
+          volumes:
+          - name: backup-storage
+            persistentVolumeClaim:
+              claimName: mongodb-backup-pvc
+          - name: backup-script
+            configMap:
+              name: mongodb-backup-script
+              defaultMode: 0755
+
+---
+# MongoDB Backup PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mongodb-backup-pvc
+  namespace: microservices
+  labels:
+    app: mongodb-backup
+    component: storage
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+  storageClassName: standard
+
+---
+# MongoDB Backup Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mongodb-backup-config
+  namespace: microservices
+data:
+  retention-days: "7"
+  backup-frequency: "daily"
+  compression: "gzip"
+  backup-type: "full"
+
+---
+# MongoDB Backup Secret
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mongodb-backup-secret
+  namespace: microservices
+type: Opaque
+data:
+  # Base64 encoded values - replace with actual MongoDB credentials
+  username: ""
+  password: ""
+
+---
+# MongoDB Restore Job Template
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mongodb-restore
+  namespace: microservices
+  labels:
+    app: mongodb-restore
+    component: recovery
+spec:
+  template:
+    metadata:
+      labels:
+        app: mongodb-restore
+        component: recovery
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: mongodb-restore
+        image: mongo:6.0
+        command:
+        - /bin/bash
+        - /scripts/restore.sh
+        env:
+        - name: MONGODB_HOST
+          value: "mongodb-service.microservices.svc.cluster.local"
+        - name: MONGODB_PORT
+          value: "27017"
+        - name: MONGODB_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-backup-secret
+              key: username
+              optional: true
+        - name: MONGODB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-backup-secret
+              key: password
+              optional: true
+        - name: MONGODB_AUTH_DB
+          value: "admin"
+        - name: BACKUP_DIR
+          value: "/backup"
+        - name: BACKUP_FILE
+          value: "latest"  # Can be overridden
+        volumeMounts:
+        - name: backup-storage
+          mountPath: /backup
+          readOnly: true
+        - name: backup-script
+          mountPath: /scripts
+          readOnly: true
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+      volumes:
+      - name: backup-storage
+        persistentVolumeClaim:
+          claimName: mongodb-backup-pvc
+      - name: backup-script
+        configMap:
+          name: mongodb-backup-script
+          defaultMode: 0755
+
+---
+# Application Data Backup CronJob
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: app-data-backup
+  namespace: microservices
+  labels:
+    app: app-data-backup
+    component: backup
+spec:
+  schedule: "0 3 * * *"  # Daily at 3 AM
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: app-data-backup
+            component: backup
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: app-data-backup
+            image: alpine:3.18
+            command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              
+              echo "Starting application data backup at $(date)"
+              
+              BACKUP_DIR="/backup"
+              TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+              BACKUP_NAME="app-data-backup-${TIMESTAMP}"
+              BACKUP_PATH="${BACKUP_DIR}/${BACKUP_NAME}"
+              
+              mkdir -p "${BACKUP_PATH}"
+              
+              # Backup application configs
+              echo "Backing up application configurations..."
+              kubectl get configmaps -n microservices -o yaml > "${BACKUP_PATH}/configmaps.yaml"
+              kubectl get secrets -n microservices -o yaml > "${BACKUP_PATH}/secrets.yaml"
+              kubectl get services -n microservices -o yaml > "${BACKUP_PATH}/services.yaml"
+              kubectl get deployments -n microservices -o yaml > "${BACKUP_PATH}/deployments.yaml"
+              
+              # Backup persistent volume claims
+              echo "Backing up PVC configurations..."
+              kubectl get pvc -n microservices -o yaml > "${BACKUP_PATH}/pvcs.yaml"
+              
+              # Create metadata
+              cat > "${BACKUP_PATH}/metadata.json" << EOF
+              {
+                "backup_timestamp": "${TIMESTAMP}",
+                "namespace": "microservices",
+                "backup_type": "application-data",
+                "created_by": "kubernetes-cronjob"
+              }
+              EOF
+              
+              # Compress backup
+              echo "Compressing backup..."
+              cd "${BACKUP_DIR}"
+              tar -czf "${BACKUP_NAME}.tar.gz" "${BACKUP_NAME}"
+              rm -rf "${BACKUP_NAME}"
+              
+              # Cleanup old backups
+              echo "Cleaning up old backups..."
+              find "${BACKUP_DIR}" -name "app-data-backup-*.tar.gz" -mtime +7 -delete
+              
+              echo "Application data backup completed at $(date)"
+            volumeMounts:
+            - name: backup-storage
+              mountPath: /backup
+            - name: kube-config
+              mountPath: /root/.kube
+              readOnly: true
+            resources:
+              requests:
+                memory: "64Mi"
+                cpu: "50m"
+              limits:
+                memory: "256Mi"
+                cpu: "200m"
+          volumes:
+          - name: backup-storage
+            persistentVolumeClaim:
+              claimName: mongodb-backup-pvc
+          - name: kube-config
+            secret:
+              secretName: backup-service-account-token
+
+---
+# Database Health Check CronJob
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: database-health-check
+  namespace: microservices
+  labels:
+    app: database-health-check
+    component: monitoring
+spec:
+  schedule: "*/15 * * * *"  # Every 15 minutes
+  concurrencyPolicy: Allow
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: database-health-check
+            component: monitoring
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: health-check
+            image: mongo:6.0
+            command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              
+              MONGODB_HOST="mongodb-service.microservices.svc.cluster.local"
+              MONGODB_PORT="27017"
+              
+              echo "Checking MongoDB health at $(date)"
+              
+              # Check connectivity
+              mongo --host "${MONGODB_HOST}:${MONGODB_PORT}" --eval "db.adminCommand('ping')" --quiet
+              
+              # Check database size
+              DB_STATS=$(mongo --host "${MONGODB_HOST}:${MONGODB_PORT}" --eval "printjson(db.stats())" --quiet)
+              echo "Database statistics: ${DB_STATS}"
+              
+              # Check recent backup status
+              BACKUP_DIR="/backup"
+              LATEST_BACKUP=$(ls -t ${BACKUP_DIR}/mongodb-backup-*.tar.gz 2>/dev/null | head -n1 || echo "none")
+              
+              if [ "${LATEST_BACKUP}" != "none" ]; then
+                BACKUP_AGE=$(stat -c %Y "${LATEST_BACKUP}")
+                CURRENT_TIME=$(date +%s)
+                AGE_HOURS=$(( (CURRENT_TIME - BACKUP_AGE) / 3600 ))
+                echo "Latest backup: ${LATEST_BACKUP} (${AGE_HOURS} hours old)"
+                
+                if [ ${AGE_HOURS} -gt 25 ]; then
+                  echo "WARNING: Latest backup is ${AGE_HOURS} hours old"
+                  exit 1
+                fi
+              else
+                echo "WARNING: No backups found"
+                exit 1
+              fi
+              
+              echo "Database health check passed at $(date)"
+            volumeMounts:
+            - name: backup-storage
+              mountPath: /backup
+              readOnly: true
+            resources:
+              requests:
+                memory: "32Mi"
+                cpu: "25m"
+              limits:
+                memory: "128Mi"
+                cpu: "100m"
+          volumes:
+          - name: backup-storage
+            persistentVolumeClaim:
+              claimName: mongodb-backup-pvc

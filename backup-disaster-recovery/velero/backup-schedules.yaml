@@ -1,0 +1,186 @@
+---
+# Velero backup schedules for automated backups
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: daily-backup
+  namespace: velero
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  template:
+    includedNamespaces:
+    - microservices
+    - default
+    - kube-system
+    excludedResources:
+    - secrets
+    - events
+    storageLocation: default
+    ttl: 168h  # 7 days
+    includeClusterResources: true
+
+---
+# Weekly backup schedule
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: weekly-backup
+  namespace: velero
+spec:
+  schedule: "0 3 * * 0"  # Weekly on Sunday at 3 AM
+  template:
+    includedNamespaces:
+    - microservices
+    - default
+    - kube-system
+    - argocd
+    - istio-system
+    - monitoring
+    - logging
+    storageLocation: default
+    ttl: 720h  # 30 days
+    includeClusterResources: true
+
+---
+# MongoDB backup hook
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: mongodb-backup
+  namespace: velero
+spec:
+  schedule: "0 1 * * *"  # Daily at 1 AM
+  template:
+    includedNamespaces:
+    - microservices
+    includedResources:
+    - persistentvolumes
+    - persistentvolumeclaims
+    - pods
+    labelSelector:
+      matchLabels:
+        app: mongodb
+    storageLocation: default
+    ttl: 240h  # 10 days
+    hooks:
+      resources:
+      - name: mongodb-backup-hook
+        includedNamespaces:
+        - microservices
+        labelSelector:
+          matchLabels:
+            app: mongodb
+        pre:
+        - exec:
+            container: mongodb
+            command:
+            - /bin/bash
+            - -c
+            - |
+              mongodump --host localhost:27017 --out /backup/$(date +%Y%m%d_%H%M%S)
+              echo "MongoDB backup completed"
+        post:
+        - exec:
+            container: mongodb
+            command:
+            - /bin/bash
+            - -c
+            - |
+              echo "Post-backup cleanup"
+              find /backup -type d -mtime +7 -exec rm -rf {} \;
+
+---
+# Critical systems backup
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: critical-systems-backup
+  namespace: velero
+spec:
+  schedule: "0 4 * * *"  # Daily at 4 AM
+  template:
+    includedNamespaces:
+    - kube-system
+    - argocd
+    - istio-system
+    includedResources:
+    - configmaps
+    - secrets
+    - services
+    - deployments
+    - statefulsets
+    - persistentvolumes
+    - persistentvolumeclaims
+    storageLocation: default
+    ttl: 336h  # 14 days
+    includeClusterResources: true
+
+---
+# Application data backup
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: app-data-backup
+  namespace: velero
+spec:
+  schedule: "0 5 * * *"  # Daily at 5 AM
+  template:
+    includedNamespaces:
+    - microservices
+    includedResources:
+    - persistentvolumes
+    - persistentvolumeclaims
+    storageLocation: default
+    ttl: 168h  # 7 days
+    snapshotVolumes: true
+
+---
+# Configuration backup
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: config-backup
+  namespace: velero
+spec:
+  schedule: "0 6 * * *"  # Daily at 6 AM
+  template:
+    includedNamespaces:
+    - microservices
+    - argocd
+    - istio-system
+    - monitoring
+    includedResources:
+    - configmaps
+    - secrets
+    storageLocation: default
+    ttl: 720h  # 30 days
+    includeClusterResources: false
+
+---
+# Disaster recovery backup (full cluster)
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: disaster-recovery-backup
+  namespace: velero
+spec:
+  schedule: "0 1 * * 6"  # Weekly on Saturday at 1 AM
+  template:
+    storageLocation: default
+    ttl: 2160h  # 90 days
+    includeClusterResources: true
+    # Full cluster backup - no namespace restrictions
+
+---
+# Pre-deployment backup
+apiVersion: velero.io/v1
+kind: BackupHook
+metadata:
+  name: pre-deployment-backup
+  namespace: velero
+spec:
+  includedNamespaces:
+  - microservices
+  storageLocation: default
+  ttl: 72h  # 3 days
+  includeClusterResources: false
