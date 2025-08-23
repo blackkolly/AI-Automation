@@ -1,1 +1,1 @@
-This project comprises projects that are
+This project comprises projects that are comprises microservice application deyployment to the AWS
